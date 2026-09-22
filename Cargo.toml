@@ -1,0 +1,13 @@
+[package]
+name = "jjunction"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+description = "A collection of tools for the Jujutsu (jj) version control system"
+repository = "https://github.com/sikongjueluo/jjunction"
+readme = "README.md"
+
+[dependencies]
+jj-lib = "0.45.1"
+
+[dev-dependencies]

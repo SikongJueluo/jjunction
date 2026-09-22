@@ -11,7 +11,11 @@
   env.GREET = "devenv";
 
   # https://devenv.sh/packages/
-  packages = [ pkgs.git ];
+  packages = with pkgs; [
+    git
+    gitnr
+    just
+  ];
 
   # https://devenv.sh/languages/
   languages.rust = {
@@ -51,6 +55,32 @@
 
   # https://devenv.sh/git-hooks/
   # git-hooks.hooks.shellcheck.enable = true;
+
+  integrations.gitnr.".gitignore" = {
+    templates = [
+      "gh:Rust"
+    ];
+
+    content = [
+      # Devenv
+      ".devenv*"
+      "devenv.local.nix"
+      "devenv.local.yaml"
+
+      # direnv
+      ".direnv"
+
+      # pre-commit
+      ".pre-commit-config.yaml"
+
+      # others
+      ".env"
+      "result"
+
+      # keep lockfile tracked (tool project)
+      "!Cargo.lock"
+    ];
+  };
 
   # See full reference at https://devenv.sh/reference/options/
 }
