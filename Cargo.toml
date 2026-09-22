@@ -9,5 +9,7 @@ readme = "README.md"
 
 [dependencies]
 jj-lib = "0.45.1"
+dirs = "7"
 
 [dev-dependencies]
+tempfile = "3"

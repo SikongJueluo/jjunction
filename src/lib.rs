@@ -2,6 +2,8 @@
 //!
 //! Built directly on top of the [`jj-lib`] crate.
 
+pub mod config;
+
 #[cfg(test)]
 mod tests {
     use jj_lib::config::ConfigLayer;
