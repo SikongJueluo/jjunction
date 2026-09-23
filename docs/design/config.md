@@ -48,10 +48,31 @@ jjunction 有两层配置：全局（用户级）与项目本地（per-repo）�
 | `mod.rs` | `ConfigReader` trait、`JjunctionConfig`、文件名常量、层装配（`load_stacked`） | 已有 |
 | `global.rs` | 用户全局层读取（`dirs` 解析平台配置目录） | 已有 |
 | `local.rs` | 仓库内 untrusted 层读取 | 已有 |
-| `trust.rs` | trust 门 + 安全键白名单 | 后续（随首个真实配置键落地） |
+| `trust.rs` | trust 门（`trusted-repos`）+ 安全键白名单 | 已有（白名单随后续键扩展） |
+
+其余模块：
+
+| 文件 | 职责 | 状态 |
+| --- | --- | --- |
+| `src/link.rs` | `[[link]]` 条目模型 + `apply` / `doctor`（首个 trust 门后的键） | 已有 |
+| `src/workspace.rs` | jj-lib 多 workspace 枚举 + 主→其他文件 sync + direnv allow（内容闸） | 已有 |
+| `src/bin/jjn.rs` | CLI：`jjn apply`（两阶段）/ `jjn doctor` | 已有（Linux/macOS；Windows 延后） |
 
 ## 后果与风险
 
 - `ConfigSource::User` 承载两层是借用语义，升级 jj-lib 时需回归测试同源排序行为
 - 将来支持 JSON/YAML 输入时以薄 adapter 转 `toml_edit::Value`，不引入第二套配置模型
 - trust 记录存于全局层 → 全局配置文件格式需预留 `trusted-repos` 类键
+
+## 变更响应（2026-09-23 补充）
+
+采用 direnv 的 prompt 时检查模型，不引入 daemon：
+
+- `.envrc` 中 `watch_file .jj/repo/workspace_store/index`（workspace 增删改写此文件）
+  与 `watch_file .jjunction/config.toml`（配置变更）；`[ -d .jj/repo ]` 守卫避免
+  secondary workspace（`.jj/repo` 为文件）watch 到错误路径
+- watch 触发 direnv 重新求值 → enterShell 里的后台 `jjn apply --quiet` 重新同步
+- 局限：反应粒度为下一次默认 workspace 的 prompt；纯 agent 非交互流程需 agent
+  自行跑 `jjn apply`（写入 AGENTS.md 约定）
+- 后手：`jjn watch` daemon（notify 监听 index/config/各 workspace 根，防抖后 apply），
+  适用于纯 agent 建仓或链接自愈需求，暂不实施

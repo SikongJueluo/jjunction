@@ -20,9 +20,11 @@
 
 pub mod global;
 pub mod local;
+pub mod trust;
 
 use std::path::Path;
 
+use jj_lib::config::ConfigGetResultExt as _;
 use jj_lib::config::ConfigLayer;
 use jj_lib::config::ConfigLoadError;
 use jj_lib::config::ConfigSource;
@@ -98,6 +100,55 @@ pub trait ConfigReader {
 
     /// Reads and parses the configuration layer.
     fn read(&self) -> Result<JjunctionConfig, Self::Error>;
+}
+
+/// How `jjn` deals with `direnv allow` for non-default workspaces.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AllowPolicy {
+    /// Run `direnv allow <workspace>` when `.envrc` matches the default
+    /// workspace's copy byte for byte.
+    Auto,
+    /// Print the `direnv allow` command without running it.
+    #[default]
+    Hint,
+    /// Do nothing.
+    Never,
+}
+
+/// `[workspace]` section: cross-workspace file sync configuration.
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceConfig {
+    /// Files mirrored from the default workspace into every other workspace.
+    /// Defaults to the devenv/direnv set ([`crate::workspace::DEFAULT_SYNC_FILES`]).
+    pub sync: Option<Vec<String>>,
+    /// `direnv allow` policy for non-default workspaces.
+    #[serde(default)]
+    pub allow: AllowPolicy,
+}
+
+impl WorkspaceConfig {
+    /// Returns the effective sync file list.
+    pub fn files(&self) -> Vec<String> {
+        self.sync.clone().unwrap_or_else(|| {
+            crate::workspace::DEFAULT_SYNC_FILES
+                .iter()
+                .map(|file| (*file).to_owned())
+                .collect()
+        })
+    }
+}
+
+/// Loads the `[workspace]` section from the local configuration stack.
+/// Missing section yields the default configuration.
+pub fn load_workspace_config(
+    local: &jj_lib::config::StackedConfig,
+) -> Result<WorkspaceConfig, jj_lib::config::ConfigGetError> {
+    Ok(local
+        .get::<WorkspaceConfig>("workspace")
+        .optional()?
+        .unwrap_or_default())
 }
 
 #[cfg(test)]

@@ -14,6 +14,7 @@
   packages = with pkgs; [
     git
     gitnr
+    jujutsu
     just
   ];
 
@@ -39,6 +40,11 @@
   enterShell = ''
     hello         # Run scripts directly
     git --version # Use packages
+
+    # keep all jj workspaces in sync (links + direnv allow) without blocking
+    if command -v jjn >/dev/null 2>&1; then
+      (jjn apply --quiet >/dev/null 2>&1 &)
+    fi
   '';
 
   # https://devenv.sh/tasks/

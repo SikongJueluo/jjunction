@@ -3,6 +3,24 @@
 //! Built directly on top of the [`jj-lib`] crate.
 
 pub mod config;
+pub mod link;
+pub mod workspace;
+
+use std::path::Path;
+use std::path::PathBuf;
+
+/// Searches upwards from `start` for a workspace root: the first ancestor
+/// containing a `.jj` or `.jjunction` directory.
+pub fn find_workspace_root(start: &Path) -> Option<PathBuf> {
+    let mut dir = Some(start);
+    while let Some(current) = dir {
+        if current.join(".jj").exists() || current.join(".jjunction").exists() {
+            return Some(current.to_owned());
+        }
+        dir = current.parent();
+    }
+    None
+}
 
 #[cfg(test)]
 mod tests {

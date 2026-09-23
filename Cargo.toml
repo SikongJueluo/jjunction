@@ -10,6 +10,13 @@ readme = "README.md"
 [dependencies]
 jj-lib = "0.45.1"
 dirs = "7"
+serde = { version = "1", features = ["derive"] }
+clap = { version = "4", features = ["derive"] }
+pollster = "1"
 
 [dev-dependencies]
 tempfile = "3"
+
+[[bin]]
+name = "jjn"
+path = "src/bin/jjn.rs"
