@@ -13,6 +13,7 @@ use jjunction::config::global::GlobalConfigReader;
 use jjunction::config::local::LocalConfigReader;
 use jjunction::config::trust::is_trusted;
 use jjunction::find_workspace_root;
+use jjunction::hooks;
 use jjunction::link;
 use jjunction::lock::RepoLock;
 use jjunction::repo;
@@ -47,6 +48,11 @@ enum Command {
     Repo {
         #[command(subcommand)]
         command: RepoCommand,
+    },
+    /// Wire the workspace reaction loop (.envrc watch block, devenv hook)
+    Init {
+        #[command(flatten)]
+        common: CommonArgs,
     },
 }
 
@@ -104,6 +110,7 @@ fn main() -> ExitCode {
         } => cmd_apply(common, force, quiet),
         Command::Doctor { common } => cmd_doctor(common),
         Command::Repo { command } => cmd_repo(command),
+        Command::Init { common } => cmd_init(common),
     }
 }
 
@@ -326,9 +333,18 @@ fn cmd_doctor(common: CommonArgs) -> ExitCode {
         }
     };
 
+    let mut problems = 0;
+    let hooks_health = hooks::doctor(&loaded.root);
+    if !hooks_health.is_ok() {
+        println!("hooks: FAIL {}", hooks_health);
+        problems += 1;
+    }
+
     if repos.is_empty() && entries.is_empty() {
-        println!("no [[repo]] or [[link]] entries; nothing to check");
-        return ExitCode::SUCCESS;
+        if problems == 0 {
+            println!("no [[repo]] or [[link]] entries; nothing to check");
+        }
+        return exit_code(problems > 0);
     }
     if !is_trusted(&loaded.global, &loaded.root) {
         println!(
@@ -338,10 +354,8 @@ fn cmd_doctor(common: CommonArgs) -> ExitCode {
             repos.len(),
             entries.len()
         );
-        return ExitCode::SUCCESS;
+        return exit_code(problems > 0);
     }
-
-    let mut problems = 0;
 
     if !repos.is_empty() {
         let lock = match RepoLock::load_or_create(&loaded.lock_path()) {
@@ -388,6 +402,34 @@ fn cmd_doctor(common: CommonArgs) -> ExitCode {
     } else {
         eprintln!("{problems} problem(s) found");
         ExitCode::FAILURE
+    }
+}
+
+fn cmd_init(common: CommonArgs) -> ExitCode {
+    let root = match find_workspace_root(&common.root) {
+        Some(root) => root,
+        None => {
+            eprintln!(
+                "error: no workspace root found at or above {}",
+                common.root.display()
+            );
+            return ExitCode::FAILURE;
+        }
+    };
+    match hooks::init(&root) {
+        Ok(report) => {
+            println!(".jjunction/config.toml: {}", report.config);
+            println!(".envrc: {}", report.envrc);
+            println!("devenv.local.nix: {}", report.devenv_local);
+            if report.devenv_local == hooks::WireStatus::Skipped {
+                println!("  (no devenv.yaml/devenv.nix: not a devenv project)");
+            }
+            ExitCode::SUCCESS
+        }
+        Err(err) => {
+            eprintln!("error: {err}");
+            ExitCode::FAILURE
+        }
     }
 }
 

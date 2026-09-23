@@ -74,5 +74,7 @@ jjunction 有两层配置：全局（用户级）与项目本地（per-repo）�
 - watch 触发 direnv 重新求值 → enterShell 里的后台 `jjn apply --quiet` 重新同步
 - 局限：反应粒度为下一次默认 workspace 的 prompt；纯 agent 非交互流程需 agent
   自行跑 `jjn apply`（写入 AGENTS.md 约定）
+- 自动化（2026-09-23）：上述手工接线由 `jjn init` 幂等完成（.envrc 标记块 +
+  devenv.local.nix 的 enterShell 钩子，见 `src/hooks.rs`）；doctor 会报告未接线状态
 - 后手：`jjn watch` daemon（notify 监听 index/config/各 workspace 根，防抖后 apply），
   适用于纯 agent 建仓或链接自愈需求，暂不实施

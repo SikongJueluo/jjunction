@@ -3,6 +3,7 @@
 //! Built directly on top of the [`jj-lib`] crate.
 
 pub mod config;
+pub mod hooks;
 pub mod link;
 pub mod lock;
 pub mod repo;
