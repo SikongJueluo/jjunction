@@ -269,7 +269,7 @@ fn resolve_source(root: &Path, source: &str) -> PathBuf {
 }
 
 /// A target must be a relative path staying inside the workspace root.
-fn target_within_root(target: &str) -> bool {
+pub(crate) fn target_within_root(target: &str) -> bool {
     let path = Path::new(target);
     !path.is_absolute()
         && !path.components().any(|c| {

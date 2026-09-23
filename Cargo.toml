@@ -9,6 +9,8 @@ readme = "README.md"
 
 [dependencies]
 jj-lib = "0.45.1"
+gix = { version = "0.87", default-features = false }
+toml_edit = "0.25"
 dirs = "7"
 serde = { version = "1", features = ["derive"] }
 clap = { version = "4", features = ["derive"] }

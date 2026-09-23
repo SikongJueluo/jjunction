@@ -39,6 +39,10 @@ pub const LOCAL_CONFIG_DIR: &str = ".jjunction";
 /// [`LOCAL_CONFIG_DIR`].
 pub const LOCAL_CONFIG_FILE: &str = "config.toml";
 
+/// File name of the machine-generated lock file (resolved sub-repo commits),
+/// inside [`LOCAL_CONFIG_DIR`]. See `docs/design/subrepo.md`.
+pub const LOCAL_LOCK_FILE: &str = "lock.toml";
+
 /// Directory name of the global configuration, relative to the platform
 /// config directory (e.g. `~/.config/jjunction/`).
 pub const GLOBAL_CONFIG_DIR: &str = "jjunction";

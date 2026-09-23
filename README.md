@@ -12,12 +12,28 @@ A collection of tools for the [Jujutsu](https://github.com/jj-vcs/jj) (jj) versi
 #   target = "links/shared.txt"     # relative to repo root
 #   type = "link"
 #
+#   [[repo]]
+#   url = "https://github.com/org/repo.git"   # vendored sub-repo
+#   target = "third_party/repo"                # default: name
+#   rev = "main"                               # branch/tag/sha; default: floating
+#
 #   [workspace]
 #   allow = "auto"   # direnv allow secondary workspaces when .envrc matches
 
-jjn apply    # create links + sync all jj workspaces (default→others)
-jjn doctor  # check config and link health
+jjn apply    # materialize repos to locked commits + links + sync workspaces
+jjn doctor  # check config, [[repo]], and [[link]] health
+
+jjn repo add <url> [--target p] [--rev r]   # append manifest entry + clone
+jjn repo update [name…]                     # fetch, re-resolve revs, advance lock
+jjn repo remove <name>                      # drop entries; files stay on disk
 ```
+
+Sub-repos are **readonly** vendored git checkouts: a detached HEAD at the
+commit recorded in `.jjunction/lock.toml` (machine-generated, tracked in the
+outer repo for reproducibility; `jjn apply` restores exactly the locked
+commits, `jjn repo update` advances them). Dirty working copies are never
+touched — `jjn doctor` reports them. To develop a sub-repo, fork it and point
+the `url` at your fork.
 
 Trust the repo once in `~/.config/jjunction/config.toml`:
 

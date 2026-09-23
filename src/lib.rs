@@ -4,6 +4,8 @@
 
 pub mod config;
 pub mod link;
+pub mod lock;
+pub mod repo;
 pub mod workspace;
 
 use std::path::Path;
