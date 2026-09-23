@@ -64,6 +64,25 @@ watch_file .jjunction/config.toml
 With this, `jj workspace add …` at a prompt in the default workspace
 re-syncs all workspaces at the next prompt — no daemon required.
 
+## Installation
+
+NixOS / Home Manager (flakes):
+
+```nix
+# flake input
+inputs.jjunction.url = "github:sikongjueluo/jjunction";
+
+# NixOS module
+programs.jjunction.enable = true;   # imports jjunction.nixosModules.jjunction
+
+# or Home Manager
+programs.jjunction.enable = true;   # imports jjunction.homeManagerModules.jjunction
+```
+
+Ad-hoc: `nix run github:sikongjueluo/jjunction`, or `nix build .#jjunction` from
+a checkout. The package wraps `git` and `direnv` into `jjn`'s PATH, so it works
+in pure shells.
+
 ## Development
 
 ```sh
