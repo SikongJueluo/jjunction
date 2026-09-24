@@ -115,3 +115,20 @@ git 子进程封装与 gix 读放 `src/repo.rs` 内（量小不拆模块）。
   后手 `apply --offline`
 - 浮动 rev 的远端默认分支变更无法廉价检测（接受；`repo update` 主动刷新）
 - Windows 延后（路径与 symlink 语义）
+
+## 变更（2026-09-24，可用性返工）
+
+真实使用暴露的连环坑（trust 无入口、repo add 非原子、无可见性命令、空目录语义
+偏离 git）催生以下修正：
+
+- 新增 `jjn trust`：direnv-allow 式信任入口；所有 untrusted 提示指向它
+- trust 门现在覆盖一切物化动词（apply / sync / update / add）；纯 manifest
+  手术（remove / list）不设门，作为无信任时的恢复路径
+- 新增 `jjn repo sync`（uv-sync 式收敛：clone/checkout 到 lock，静默 GC 孤儿
+  lock 条目，不删目录）与 `jjn repo list`（name/target/rev/状态一屏）
+- `repo add` 原子化：先物化后写 manifest；失败回滚本次创建的目录并声明
+  "nothing written"；重名时打印已有条目全文 + remove 命令；`--target` 帮助
+  文本写明是仓库本身路径
+- 允许 clone 进已存在的空目录（对齐 `git clone`）；非空非 git 目录的拒绝
+  信息包含语义解释与修复建议
+- 错误信息纪律：事实 + 当前状态 + 一条具体修复命令

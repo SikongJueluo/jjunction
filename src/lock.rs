@@ -168,6 +168,15 @@ impl RepoLock {
         removed
     }
 
+    /// Names with a recorded commit, in file order.
+    pub fn names(&self) -> Vec<String> {
+        self.doc
+            .get("repo")
+            .and_then(|item| item.as_table())
+            .map(|table| table.iter().map(|(key, _)| key.to_owned()).collect())
+            .unwrap_or_default()
+    }
+
     /// Whether any change since load still needs saving.
     pub fn is_changed(&self) -> bool {
         self.changed

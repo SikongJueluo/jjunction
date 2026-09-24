@@ -20,10 +20,13 @@ A collection of tools for the [Jujutsu](https://github.com/jj-vcs/jj) (jj) versi
 #   [workspace]
 #   allow = "auto"   # direnv allow secondary workspaces when .envrc matches
 
+jjn trust    # trust this workspace (direnv-allow style)
 jjn apply    # materialize repos to locked commits + links + sync workspaces
 jjn doctor  # check config, [[repo]], and [[link]] health
 
-jjn repo add <url> [--target p] [--rev r]   # append manifest entry + clone
+jjn repo add <url> [--target p] [--rev r]   # clone + append manifest (atomic)
+jjn repo list                               # entries + materialization state
+jjn repo sync                               # converge everything to the lock
 jjn repo update [name…]                     # fetch, re-resolve revs, advance lock
 jjn repo remove <name>                      # drop entries; files stay on disk
 ```
@@ -35,11 +38,14 @@ commits, `jjn repo update` advances them). Dirty working copies are never
 touched — `jjn doctor` reports them. To develop a sub-repo, fork it and point
 the `url` at your fork.
 
-Trust the repo once in `~/.config/jjunction/config.toml`:
+Trust the repo once (like `direnv allow`) — every gated message points here:
 
-```toml
-trusted-repos = ["/path/to/repo"]
+```sh
+jjn trust
 ```
+
+(equivalent to appending the workspace root to `trusted-repos` in
+`~/.config/jjunction/config.toml`)
 
 Wire the reaction loop once — `jjn init` is idempotent and marker-scoped: it
 appends a managed block to `.envrc` (watch_file the jj workspace index and

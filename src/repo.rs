@@ -156,7 +156,13 @@ impl fmt::Display for RepoError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::EscapedTarget(target) => write!(f, "target escapes workspace root: {target}"),
-            Self::Occupied(path) => write!(f, "occupied by a non-repo path: {}", path.display()),
+            Self::Occupied(path) => write!(
+                f,
+                "target exists and is not a git repository: {} \
+                 (target names the repository itself, not its parent; \
+                 only empty directories are cloned into)",
+                path.display()
+            ),
             Self::Duplicate { kind, value } => write!(f, "duplicate repo {kind}: {value}"),
             Self::Git { what, stderr } => write!(f, "git {what} failed: {stderr}"),
             Self::Resolve(message) => write!(f, "{message}"),
@@ -208,8 +214,20 @@ pub fn apply_one(
 
     let existed = target.join(".git").symlink_metadata().is_ok();
     if !existed {
-        if target.symlink_metadata().is_ok() {
-            return Err(RepoError::Occupied(target));
+        match fs::symlink_metadata(&target) {
+            // Only an existing *empty* directory may be cloned into, matching
+            // `git clone` semantics; anything else is occupied.
+            Ok(meta) if meta.is_dir() => {
+                let empty = fs::read_dir(&target)
+                    .map(|mut entries| entries.next().is_none())
+                    .unwrap_or(false);
+                if !empty {
+                    return Err(RepoError::Occupied(target));
+                }
+            }
+            Ok(_) => return Err(RepoError::Occupied(target)),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err.into()),
         }
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent)?;
@@ -435,7 +453,7 @@ impl fmt::Display for DoctorStatus {
             Self::MissingTarget => write!(f, "not materialized"),
             Self::Occupied => write!(f, "target is not a git repository"),
             Self::EscapedTarget => write!(f, "target escapes workspace root"),
-            Self::MissingLock => write!(f, "no lock entry (jjn apply records one)"),
+            Self::MissingLock => write!(f, "no lock entry (jjn repo sync records one)"),
             Self::Diverged { at, locked } => match at {
                 Some(at) => write!(f, "at {at}, locked {locked}"),
                 None => write!(f, "unborn HEAD, locked {locked}"),
@@ -471,7 +489,8 @@ pub fn doctor(root: &Path, entries: &[RepoEntry], lock: &RepoLock) -> Vec<Diagno
         .collect()
 }
 
-fn doctor_one(root: &Path, entry: &RepoEntry, lock: &RepoLock) -> DoctorStatus {
+/// Checks one entry without modifying anything.
+pub fn doctor_one(root: &Path, entry: &RepoEntry, lock: &RepoLock) -> DoctorStatus {
     let target_str = entry.effective_target();
     if !target_within_root(&target_str) {
         return DoctorStatus::EscapedTarget;
@@ -504,6 +523,28 @@ fn doctor_one(root: &Path, entry: &RepoEntry, lock: &RepoLock) -> DoctorStatus {
         };
     }
     DoctorStatus::Ok
+}
+
+/// One-line summary of an entry for error messages and listings.
+pub fn entry_summary(entry: &RepoEntry) -> String {
+    format!(
+        "\"{}\" url={} target={} rev={}",
+        entry.effective_name(),
+        entry.url,
+        entry.effective_target(),
+        entry.rev.as_deref().unwrap_or("(floating)")
+    )
+}
+
+/// Drops lock entries whose manifest entry is gone; returns the dropped
+/// names (lock is derived state, so this is a safe garbage collection).
+pub fn gc_lock(lock: &mut RepoLock, entries: &[RepoEntry]) -> Vec<String> {
+    let declared: HashSet<String> = entries.iter().map(RepoEntry::effective_name).collect();
+    lock.names()
+        .into_iter()
+        .filter(|name| !declared.contains(name))
+        .filter(|name| lock.remove(name))
+        .collect()
 }
 
 /// Appends a `[[repo]]` entry to the manifest, preserving comments and
@@ -844,6 +885,36 @@ mod tests {
             Err(RepoError::Occupied(_))
         ));
         assert!(target.join("keep.txt").exists());
+    }
+
+    #[test]
+    fn apply_clones_into_an_existing_empty_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_c1, c2) = fixture_remote(dir.path());
+        let (_ws, root, entry, mut lock) = fixture_workspace(&dir.path().join("remote"));
+
+        // Pre-existing empty directory, like `git clone url dir` accepts.
+        let target = target_path(&root, &entry);
+        fs::create_dir_all(&target).unwrap();
+
+        let status = apply_one(&root, &entry, &mut lock, false).unwrap();
+        assert_eq!(status, ApplyStatus::Cloned(c2.clone()));
+        assert_eq!(rev_parse(&target, "HEAD"), c2);
+    }
+
+    #[test]
+    fn gc_lock_drops_orphans_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let remote = dir.path().join("remote");
+        let (_ws, _root, entry, mut lock) = fixture_workspace(&remote);
+
+        lock.set_commit("ghost", &"a".repeat(40));
+        lock.set_commit("remote", &"b".repeat(40));
+
+        let dropped = gc_lock(&mut lock, std::slice::from_ref(&entry));
+        assert_eq!(dropped, vec!["ghost".to_owned()]);
+        assert_eq!(lock.commit("remote"), Some("b".repeat(40).as_str()));
+        assert_eq!(lock.commit("ghost"), None);
     }
 
     #[test]
