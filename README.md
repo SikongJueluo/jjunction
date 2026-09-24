@@ -48,6 +48,13 @@ jjn trust
 (equivalent to appending the workspace root to `trusted-repos` in
 `~/.config/jjunction/config.toml`)
 
+Shell completions (Nix installs these automatically):
+
+```sh
+jjn completions fish | source        # fish
+source <(jjn completions bash)      # bash
+```
+
 Wire the reaction loop once — `jjn init` is idempotent and marker-scoped: it
 appends a managed block to `.envrc` (watch_file the jj workspace index and
 `.jjunction/config.toml`, guarded so secondary workspaces skip the `.jj/repo`

@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use clap::CommandFactory;
 use clap::Parser;
 use clap::Subcommand;
 use jj_lib::config::StackedConfig;
@@ -58,6 +59,11 @@ enum Command {
     Init {
         #[command(flatten)]
         common: CommonArgs,
+    },
+    /// Generate shell completions (bash, fish, zsh, elvish, powershell)
+    Completions {
+        /// Shell to generate completions for
+        shell: clap_complete::Shell,
     },
 }
 
@@ -128,6 +134,15 @@ fn main() -> ExitCode {
         Command::Repo { command } => cmd_repo(command),
         Command::Trust { common } => cmd_trust(common),
         Command::Init { common } => cmd_init(common),
+        Command::Completions { shell } => {
+            // Buffer, then write once: a closed pipe (`| head`) exits quietly
+            // instead of panicking inside the generator.
+            let mut buf: Vec<u8> = Vec::new();
+            clap_complete::generate(shell, &mut Cli::command(), "jjn", &mut buf);
+            use std::io::Write as _;
+            let _ = std::io::stdout().lock().write_all(&buf);
+            ExitCode::SUCCESS
+        }
     }
 }
 

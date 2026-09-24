@@ -29,6 +29,15 @@ rustPlatform.buildRustPackage (finalAttrs: {
         direnv
       ]
     }
+
+    # Standard completion dirs: NixOS/Home Manager users get these for free;
+    # everyone else can `jjn completions <shell>` (starship-style).
+    $out/bin/jjn completions bash > jjn.bash
+    $out/bin/jjn completions fish > jjn.fish
+    $out/bin/jjn completions zsh > _jjn
+    install -Dm644 jjn.bash $out/share/bash-completion/completions/jjn
+    install -Dm644 jjn.fish $out/share/fish/vendor_completions.d/jjn.fish
+    install -Dm644 _jjn $out/share/zsh/site-functions/_jjn
   '';
 
   meta = {
