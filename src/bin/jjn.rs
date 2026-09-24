@@ -234,7 +234,7 @@ fn cmd_apply(common: CommonArgs, force: bool, quiet: bool) -> ExitCode {
             }
         };
         for entry in &repos {
-            match repo::apply_one(&loaded.root, entry, &mut lock, false) {
+            match repo::apply_one(&loaded.root, entry, &mut lock, false, !quiet) {
                 Ok(status) => {
                     if !quiet {
                         println!(
@@ -566,7 +566,7 @@ fn cmd_repo_add(common: CommonArgs, entry: repo::RepoEntry) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    match repo::apply_one(&loaded.root, &entry, &mut lock, false) {
+    match repo::apply_one(&loaded.root, &entry, &mut lock, false, true) {
         Ok(status) => {
             if let Err(err) = repo::append_manifest_entry(&loaded.manifest_path(), &entry) {
                 eprintln!("error: manifest: {err}");
@@ -691,7 +691,7 @@ fn cmd_repo_sync(common: CommonArgs) -> ExitCode {
 
     let mut failed = false;
     for entry in &entries {
-        match repo::apply_one(&loaded.root, entry, &mut lock, false) {
+        match repo::apply_one(&loaded.root, entry, &mut lock, false, true) {
             Ok(status) => {
                 println!(
                     "{} ({}): {status}",
@@ -839,7 +839,7 @@ fn cmd_repo_update(common: CommonArgs, names: Vec<String>) -> ExitCode {
     };
     let mut failed = false;
     for entry in &selected {
-        match repo::apply_one(&loaded.root, entry, &mut lock, true) {
+        match repo::apply_one(&loaded.root, entry, &mut lock, true, true) {
             Ok(status) => {
                 println!(
                     "{} ({}): {status}",

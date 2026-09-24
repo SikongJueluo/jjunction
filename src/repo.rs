@@ -16,12 +16,18 @@ use std::collections::HashSet;
 use std::fmt;
 use std::fs;
 use std::io;
+use std::io::IsTerminal as _;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use std::process::Output;
+use std::process::Stdio;
+use std::sync::Arc;
+use std::sync::Mutex;
 
 use gix::object::Kind as ObjectKind;
+use indicatif::ProgressBar;
+use indicatif::ProgressStyle;
 use jj_lib::config::ConfigGetError;
 use jj_lib::config::ConfigGetResultExt as _;
 use jj_lib::config::StackedConfig;
@@ -204,6 +210,7 @@ pub fn apply_one(
     entry: &RepoEntry,
     lock: &mut RepoLock,
     refresh: bool,
+    progress: bool,
 ) -> Result<ApplyStatus, RepoError> {
     let name = entry.effective_name();
     let target_str = entry.effective_target();
@@ -232,18 +239,22 @@ pub fn apply_one(
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent)?;
         }
-        run_git(
+        run_git_progress(
             "clone",
             Some(root),
             &["clone", "--no-checkout", &entry.url, &target_str],
+            &name,
+            progress,
         )?;
     }
 
     if refresh {
-        run_git(
+        run_git_progress(
             "fetch",
             Some(&target),
             &["fetch", "--prune", "--tags", "origin"],
+            &name,
+            progress,
         )?;
         // Keep the floating-rev anchor in sync with the remote default.
         let _ = run_git(
@@ -254,11 +265,11 @@ pub fn apply_one(
     }
 
     let desired = if refresh {
-        resolve(&target, entry.rev.as_deref(), &entry.url)?
+        resolve(&target, entry.rev.as_deref(), &entry.url, progress)?
     } else {
         match lock.commit(&name) {
             Some(commit) => commit.to_owned(),
-            None => resolve(&target, entry.rev.as_deref(), &entry.url)?,
+            None => resolve(&target, entry.rev.as_deref(), &entry.url, progress)?,
         }
     };
     if lock.commit(&name) != Some(desired.as_str()) {
@@ -272,10 +283,10 @@ pub fn apply_one(
         if is_dirty(&target)? {
             return Ok(ApplyStatus::SkippedDirty { desired });
         }
-        checkout(&target, &desired)?;
+        checkout(&target, &desired, progress)?;
         Ok(ApplyStatus::CheckedOut(desired))
     } else {
-        checkout(&target, &desired)?;
+        checkout(&target, &desired, progress)?;
         Ok(ApplyStatus::Cloned(desired))
     }
 }
@@ -283,20 +294,24 @@ pub fn apply_one(
 /// Checks out `commit` detached, fetching first when the object is missing
 /// locally (e.g. a teammate advanced the lock, or the server requires a
 /// direct SHA fetch).
-fn checkout(target: &Path, commit: &str) -> Result<(), RepoError> {
+fn checkout(target: &Path, commit: &str, progress: bool) -> Result<(), RepoError> {
     let args = ["checkout", "--detach", "--quiet", commit];
     if run_git("checkout", Some(target), &args).is_ok() {
         return Ok(());
     }
-    let _ = run_git(
+    let _ = run_git_progress(
         "fetch-sha",
         Some(target),
         &["fetch", "--no-tags", "origin", commit],
+        "fetch",
+        progress,
     );
-    run_git(
+    run_git_progress(
         "fetch",
         Some(target),
         &["fetch", "--prune", "--tags", "origin"],
+        "fetch",
+        progress,
     )?;
     run_git("checkout", Some(target), &args)?;
     Ok(())
@@ -304,21 +319,30 @@ fn checkout(target: &Path, commit: &str) -> Result<(), RepoError> {
 
 /// Resolves `rev` to a commit id, fetching when the local refs don't have
 /// it. `None` means floating: follow the remote's default branch.
-fn resolve(target: &Path, rev: Option<&str>, url: &str) -> Result<String, RepoError> {
+fn resolve(
+    target: &Path,
+    rev: Option<&str>,
+    url: &str,
+    progress: bool,
+) -> Result<String, RepoError> {
     if let Some(commit) = resolve_local(target, rev)? {
         return Ok(commit);
     }
     // Network fallback: try the revision directly, then a full fetch.
     let spec = rev.unwrap_or("HEAD");
-    let _ = run_git(
+    let _ = run_git_progress(
         "fetch-rev",
         Some(target),
         &["fetch", "--no-tags", "origin", spec],
+        "fetch",
+        progress,
     );
-    run_git(
+    run_git_progress(
         "fetch",
         Some(target),
         &["fetch", "--prune", "--tags", "origin"],
+        "fetch",
+        progress,
     )?;
     let _ = run_git(
         "set-head",
@@ -415,6 +439,183 @@ fn run_git(what: &'static str, dir: Option<&Path>, args: &[&str]) -> Result<Outp
         let tail: String = stderr.chars().rev().take(300).collect();
         let tail: String = tail.chars().rev().collect();
         Err(RepoError::Git { what, stderr: tail })
+    }
+}
+
+/// Whether progress bars can be drawn (stderr is a terminal).
+fn progress_supported() -> bool {
+    std::io::stderr().is_terminal()
+}
+
+/// One parsed git progress line: `Phase:  N% (pos/len), extra...`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GitProgress {
+    phase: String,
+    pos: u64,
+    len: u64,
+    detail: String,
+}
+
+/// Parses a git `--progress` line (optionally `remote:`-prefixed); `None` for
+/// plain informational lines.
+fn parse_progress_line(line: &str) -> Option<GitProgress> {
+    let line = line.trim_start().strip_prefix("remote: ").unwrap_or(line);
+    let (phase, rest) = line.split_once(':')?;
+    let rest = rest.trim_start();
+    let pct_end = rest.find('%')?;
+    let pct: u64 = rest[..pct_end].trim().parse().ok()?;
+    let (pos, len) = match rest.find('(').zip(rest.find(')')) {
+        Some((open, close)) if open < close => {
+            let (a, b) = rest[open + 1..close].split_once('/')?;
+            (a.trim().parse().ok()?, b.trim().parse().ok()?)
+        }
+        _ => (pct, 100),
+    };
+    Some(GitProgress {
+        phase: phase.to_owned(),
+        pos,
+        len,
+        detail: rest.to_owned(),
+    })
+}
+
+fn bar_style() -> ProgressStyle {
+    ProgressStyle::with_template("{prefix:.bold} {bar:24.cyan/blue} {pos}/{len} {msg}")
+        .expect("valid template")
+        .progress_chars("=>-")
+}
+
+fn spinner_style() -> ProgressStyle {
+    ProgressStyle::with_template("{prefix:.bold} {spinner} {msg}").expect("valid template")
+}
+
+/// The part of a git progress detail after the percentage, e.g.
+/// `", 12.30 MiB | 5.67 MiB/s"` (rate info for the bar message).
+fn tail_after_percent(detail: &str) -> String {
+    match detail.find(',') {
+        Some(comma) => detail[comma..].to_owned(),
+        None => String::new(),
+    }
+}
+
+/// Mirrors one parsed progress update onto `pb`.
+fn show_progress(pb: &ProgressBar, bar_mode: &mut bool, p: GitProgress) {
+    if !*bar_mode {
+        pb.set_style(bar_style());
+        *bar_mode = true;
+    }
+    pb.set_length(p.len);
+    pb.set_position(p.pos.min(p.len));
+    pb.set_message(format!("{}{}", p.phase, tail_after_percent(&p.detail)));
+}
+
+/// Mirrors one informational line onto `pb`.
+fn show_message(pb: &ProgressBar, bar_mode: &mut bool, line: &str) {
+    if *bar_mode {
+        pb.set_style(spinner_style());
+        pb.set_length(0);
+        pb.set_position(0);
+        *bar_mode = false;
+    }
+    pb.set_message(line.to_owned());
+}
+
+/// Runs git for a network operation with progress: forces `--progress`, pipes
+/// stderr, and mirrors git's carriage-return-updated progress lines onto a
+/// progress bar prefixed with `label`. Falls back to the silent captured path
+/// when `progress` is off or stderr is not a terminal (background hooks,
+/// tests).
+fn run_git_progress(
+    what: &'static str,
+    dir: Option<&Path>,
+    args: &[&str],
+    label: &str,
+    progress: bool,
+) -> Result<(), RepoError> {
+    if !progress || !progress_supported() {
+        run_git(what, dir, args)?;
+        return Ok(());
+    }
+
+    let mut cmd = Command::new("git");
+    cmd.arg("-c").arg("advice.detachedHead=false");
+    if let Some(dir) = dir {
+        cmd.arg("-C").arg(dir);
+    }
+    cmd.arg(args[0]).arg("--progress").args(&args[1..]);
+    cmd.stdin(Stdio::null());
+    cmd.stdout(Stdio::null());
+    cmd.stderr(Stdio::piped());
+    let mut child = cmd.spawn().map_err(|err| RepoError::Git {
+        what,
+        stderr: err.to_string(),
+    })?;
+    let stderr = child.stderr.take().expect("stderr piped");
+
+    let collected: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&collected);
+    let prefix = label.to_owned();
+    let reader = std::thread::spawn(move || {
+        let pb = ProgressBar::new_spinner();
+        pb.set_style(spinner_style());
+        pb.set_prefix(prefix);
+        pb.enable_steady_tick(std::time::Duration::from_millis(100));
+        let mut bar_mode = false;
+
+        let mut pending: Vec<u8> = Vec::new();
+        let mut buf = [0u8; 4096];
+        let mut stderr = stderr;
+        loop {
+            use std::io::Read as _;
+            match stderr.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    pending.extend_from_slice(&buf[..n]);
+                    while let Some(pos) = pending.iter().position(|&b| b == b'\r' || b == b'\n') {
+                        let line: Vec<u8> = pending.drain(..=pos).collect();
+                        let line = String::from_utf8_lossy(&line[..line.len() - 1]);
+                        let line = line.trim_end();
+                        if line.is_empty() {
+                            continue;
+                        }
+                        sink.lock().expect("progress sink").push(line.to_owned());
+                        match parse_progress_line(line) {
+                            Some(p) => show_progress(&pb, &mut bar_mode, p),
+                            None => show_message(&pb, &mut bar_mode, line),
+                        }
+                    }
+                }
+            }
+        }
+        if !pending.is_empty() {
+            let line = String::from_utf8_lossy(&pending);
+            sink.lock()
+                .expect("progress sink")
+                .push(line.trim_end().to_owned());
+        }
+        pb.finish_and_clear();
+    });
+
+    let status = child.wait();
+    let _ = reader.join();
+    match status {
+        Ok(status) if status.success() => Ok(()),
+        Ok(_) => {
+            let lines = collected.lock().expect("progress sink");
+            let tail = lines
+                .iter()
+                .rev()
+                .take(5)
+                .rev()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("\n");
+            Err(RepoError::Git { what, stderr: tail })
+        }
+        Err(err) => Err(RepoError::Git {
+            what,
+            stderr: err.to_string(),
+        }),
     }
 }
 
@@ -797,12 +998,34 @@ mod tests {
     }
 
     #[test]
+    fn parses_git_progress_lines() {
+        let p = parse_progress_line("Receiving objects:  45% (900/2000), 12.30 MiB | 5.67 MiB/s")
+            .unwrap();
+        assert_eq!(p.phase, "Receiving objects");
+        assert_eq!((p.pos, p.len), (900, 2000));
+        assert!(p.detail.contains("5.67 MiB/s"));
+
+        // remote-prefixed, done-suffixed
+        let p = parse_progress_line("remote: Counting objects: 100% (10/10), done.").unwrap();
+        assert_eq!(p.phase, "Counting objects");
+        assert_eq!((p.pos, p.len), (10, 10));
+
+        // percent without counts
+        let p = parse_progress_line("Resolving deltas:  75%").unwrap();
+        assert_eq!((p.pos, p.len), (75, 100));
+
+        // informational lines are not progress
+        assert!(parse_progress_line("Cloning into 'deps/NavDP'...").is_none());
+        assert!(parse_progress_line("").is_none());
+    }
+
+    #[test]
     fn apply_clones_locks_and_checks_out() {
         let dir = tempfile::tempdir().unwrap();
         let (_c1, c2) = fixture_remote(dir.path());
         let (_ws, root, entry, mut lock) = fixture_workspace(&dir.path().join("remote"));
 
-        let status = apply_one(&root, &entry, &mut lock, false).unwrap();
+        let status = apply_one(&root, &entry, &mut lock, false, false).unwrap();
         assert_eq!(status, ApplyStatus::Cloned(c2.clone()));
         assert_eq!(lock.commit("remote"), Some(c2.as_str()));
         assert!(lock.is_changed());
@@ -818,16 +1041,16 @@ mod tests {
         let (c1, _c2) = fixture_remote(dir.path());
         let (_ws, root, entry, mut lock) = fixture_workspace(&dir.path().join("remote"));
 
-        apply_one(&root, &entry, &mut lock, false).unwrap();
+        apply_one(&root, &entry, &mut lock, false, false).unwrap();
         assert_eq!(
-            apply_one(&root, &entry, &mut lock, false).unwrap(),
+            apply_one(&root, &entry, &mut lock, false, false).unwrap(),
             ApplyStatus::AlreadyAt(lock.commit("remote").unwrap().to_owned())
         );
 
         // Rewind the lock: apply must move HEAD without touching the network.
         lock.set_commit("remote", &c1);
         assert_eq!(
-            apply_one(&root, &entry, &mut lock, false).unwrap(),
+            apply_one(&root, &entry, &mut lock, false, false).unwrap(),
             ApplyStatus::CheckedOut(c1.clone())
         );
         let target = target_path(&root, &entry);
@@ -843,7 +1066,7 @@ mod tests {
         for (rev, expected) in [("main", &c2), ("v1", &c1), (c1.as_str(), &c1)] {
             let (_ws, root, mut entry, mut lock) = fixture_workspace(&remote);
             entry.rev = Some(rev.to_owned());
-            let status = apply_one(&root, &entry, &mut lock, false).unwrap();
+            let status = apply_one(&root, &entry, &mut lock, false, false).unwrap();
             assert_eq!(status, ApplyStatus::Cloned(expected.clone()), "rev {rev}");
         }
     }
@@ -854,12 +1077,12 @@ mod tests {
         let (c1, c2) = fixture_remote(dir.path());
         let (_ws, root, entry, mut lock) = fixture_workspace(&dir.path().join("remote"));
 
-        apply_one(&root, &entry, &mut lock, false).unwrap();
+        apply_one(&root, &entry, &mut lock, false, false).unwrap();
         let target = target_path(&root, &entry);
         fs::write(target.join("extra.txt"), "local change").unwrap();
 
         lock.set_commit("remote", &c1);
-        let status = apply_one(&root, &entry, &mut lock, false).unwrap();
+        let status = apply_one(&root, &entry, &mut lock, false, false).unwrap();
         assert_eq!(
             status,
             ApplyStatus::SkippedDirty {
@@ -881,7 +1104,7 @@ mod tests {
         fs::write(target.join("keep.txt"), "user data").unwrap();
 
         assert!(matches!(
-            apply_one(&root, &entry, &mut lock, false),
+            apply_one(&root, &entry, &mut lock, false, false),
             Err(RepoError::Occupied(_))
         ));
         assert!(target.join("keep.txt").exists());
@@ -897,7 +1120,7 @@ mod tests {
         let target = target_path(&root, &entry);
         fs::create_dir_all(&target).unwrap();
 
-        let status = apply_one(&root, &entry, &mut lock, false).unwrap();
+        let status = apply_one(&root, &entry, &mut lock, false, false).unwrap();
         assert_eq!(status, ApplyStatus::Cloned(c2.clone()));
         assert_eq!(rev_parse(&target, "HEAD"), c2);
     }
@@ -924,13 +1147,13 @@ mod tests {
         let remote = dir.path().join("remote");
         let (_ws, root, entry, mut lock) = fixture_workspace(&remote);
 
-        apply_one(&root, &entry, &mut lock, false).unwrap();
+        apply_one(&root, &entry, &mut lock, false, false).unwrap();
 
         fs::write(remote.join("file.txt"), "three").unwrap();
         commit_all(&remote, "c3");
         let c3 = rev_parse(&remote, "HEAD");
 
-        let status = apply_one(&root, &entry, &mut lock, true).unwrap();
+        let status = apply_one(&root, &entry, &mut lock, true, false).unwrap();
         assert_eq!(status, ApplyStatus::CheckedOut(c3.clone()));
         assert_eq!(lock.commit("remote"), Some(c3.as_str()));
         let target = target_path(&root, &entry);
@@ -947,10 +1170,10 @@ mod tests {
         let remote = dir.path().join("remote");
         let (_ws, root, mut entry, mut lock) = fixture_workspace(&remote);
 
-        apply_one(&root, &entry, &mut lock, false).unwrap();
+        apply_one(&root, &entry, &mut lock, false, false).unwrap();
         entry.rev = Some("no-such-branch".to_owned());
 
-        let err = apply_one(&root, &entry, &mut lock, true).unwrap_err();
+        let err = apply_one(&root, &entry, &mut lock, true, false).unwrap_err();
         assert!(matches!(err, RepoError::Resolve(_)), "got: {err}");
     }
 
@@ -965,7 +1188,7 @@ mod tests {
         let missing = doctor_one(&root, &entry, &lock);
         assert_eq!(missing, DoctorStatus::MissingTarget);
 
-        apply_one(&root, &entry, &mut lock, false).unwrap();
+        apply_one(&root, &entry, &mut lock, false, false).unwrap();
         let target = target_path(&root, &entry);
 
         // ok

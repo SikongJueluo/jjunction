@@ -36,7 +36,8 @@ commit recorded in `.jjunction/lock.toml` (machine-generated, tracked in the
 outer repo for reproducibility; `jjn apply` restores exactly the locked
 commits, `jjn repo update` advances them). Dirty working copies are never
 touched — `jjn doctor` reports them. To develop a sub-repo, fork it and point
-the `url` at your fork.
+the `url` at your fork. Network operations relay git's own progress onto a
+terminal progress bar (silent when piped or `--quiet`).
 
 Trust the repo once (like `direnv allow`) — every gated message points here:
 
