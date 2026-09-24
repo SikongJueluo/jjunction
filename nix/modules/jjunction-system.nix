@@ -23,6 +23,9 @@ in
   };
 
   config = lib.mkIf cfg.enable {
+    # Completions ship in the standard share dirs; on NixOS they activate
+    # through the shells' own options (programs.fish.enable links
+    # /share/fish, programs.bash.completion.enable links bash-completion).
     environment.systemPackages = [ cfg.package ];
   };
 }

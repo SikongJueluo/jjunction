@@ -81,6 +81,7 @@ programs.jjunction.enable = true;   # imports jjunction.nixosModules.jjunction
 
 # or Home Manager
 programs.jjunction.enable = true;   # imports jjunction.homeManagerModules.jjunction
+# completions default on: enable{Bash,Fish,Zsh}Integration to toggle
 ```
 
 Ad-hoc: `nix run github:sikongjueluo/jjunction`, or `nix build .#jjunction` from
