@@ -17,6 +17,7 @@ use std::fmt;
 use std::fs;
 use std::io;
 use std::io::IsTerminal as _;
+use std::os::unix::fs::symlink;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
@@ -746,6 +747,141 @@ pub fn gc_lock(lock: &mut RepoLock, entries: &[RepoEntry]) -> Vec<String> {
         .filter(|name| !declared.contains(name))
         .filter(|name| lock.remove(name))
         .collect()
+}
+
+/// Health of one secondary-workspace link, as created by
+/// [`link_secondary`] / reported by [`check_secondary`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SecondaryStatus {
+    /// The link was created (only from [`link_secondary`]).
+    Linked,
+    /// The link exists and points at the default workspace's checkout.
+    AlreadyLinked,
+    /// The link has not been created yet.
+    MissingLink,
+    /// The default workspace has not materialized this repo yet.
+    DefaultMissing,
+    /// Something other than the expected symlink occupies the target.
+    Occupied(PathBuf),
+    /// The link points somewhere else.
+    WrongTarget { expected: PathBuf, found: PathBuf },
+}
+
+impl SecondaryStatus {
+    /// Returns `true` when the entry needs no action.
+    pub fn is_ok(&self) -> bool {
+        matches!(self, Self::AlreadyLinked)
+    }
+}
+
+impl fmt::Display for SecondaryStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Linked => write!(f, "linked"),
+            Self::AlreadyLinked => write!(f, "already linked"),
+            Self::MissingLink => write!(f, "missing link"),
+            Self::DefaultMissing => write!(f, "default workspace has not materialized this repo"),
+            Self::Occupied(path) => {
+                write!(f, "occupied by a real path: {}", path.display())
+            }
+            Self::WrongTarget { expected, found } => write!(
+                f,
+                "points to {} instead of {}",
+                found.display(),
+                expected.display()
+            ),
+        }
+    }
+}
+
+/// Links every entry's target in `secondary_root` at the default
+/// workspace's materialized checkout.
+pub fn link_secondary(
+    default_root: &Path,
+    secondary_root: &Path,
+    entries: &[RepoEntry],
+    force: bool,
+) -> Vec<(String, SecondaryStatus)> {
+    entries
+        .iter()
+        .map(|entry| {
+            let status = secondary_link_one(default_root, secondary_root, entry, force, true);
+            (entry.effective_name(), status)
+        })
+        .collect()
+}
+
+/// Reports what [`link_secondary`] would do, without modifying anything.
+pub fn check_secondary(
+    default_root: &Path,
+    secondary_root: &Path,
+    entries: &[RepoEntry],
+) -> Vec<(String, SecondaryStatus)> {
+    entries
+        .iter()
+        .map(|entry| {
+            let status = secondary_link_one(default_root, secondary_root, entry, false, false);
+            (entry.effective_name(), status)
+        })
+        .collect()
+}
+
+/// One secondary target: symlink `secondary_root/<target>` →
+/// `default_root/<target>` (absolute; `default_root` is canonicalized by the
+/// caller). With `create` disabled it only reports.
+fn secondary_link_one(
+    default_root: &Path,
+    secondary_root: &Path,
+    entry: &RepoEntry,
+    force: bool,
+    create: bool,
+) -> SecondaryStatus {
+    let source = default_root.join(entry.effective_target());
+    let link_path = secondary_root.join(entry.effective_target());
+
+    if !source.join(".git").symlink_metadata().is_ok() {
+        return SecondaryStatus::DefaultMissing;
+    }
+    match fs::symlink_metadata(&link_path) {
+        Ok(meta) if meta.file_type().is_symlink() => match fs::read_link(&link_path) {
+            Ok(found) if found == source => SecondaryStatus::AlreadyLinked,
+            Ok(found) if force => {
+                if !create {
+                    return SecondaryStatus::WrongTarget {
+                        expected: source,
+                        found,
+                    };
+                }
+                let _ = fs::remove_file(&link_path);
+                match symlink(&source, &link_path) {
+                    Ok(()) => SecondaryStatus::Linked,
+                    Err(_) => SecondaryStatus::WrongTarget {
+                        expected: source,
+                        found,
+                    },
+                }
+            }
+            Ok(found) => SecondaryStatus::WrongTarget {
+                expected: source,
+                found,
+            },
+            Err(_) => SecondaryStatus::MissingLink,
+        },
+        Ok(_) => SecondaryStatus::Occupied(link_path),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            if !create {
+                return SecondaryStatus::MissingLink;
+            }
+            if let Some(parent) = link_path.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
+            match symlink(&source, &link_path) {
+                Ok(()) => SecondaryStatus::Linked,
+                Err(_) => SecondaryStatus::MissingLink,
+            }
+        }
+        Err(_) => SecondaryStatus::MissingLink,
+    }
 }
 
 /// Appends a `[[repo]]` entry to the manifest, preserving comments and

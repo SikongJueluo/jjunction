@@ -144,6 +144,40 @@ impl WorkspaceConfig {
     }
 }
 
+/// How secondary jj workspaces materialize `[[repo]]` entries.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SecondaryMode {
+    /// Symlink each secondary workspace's target to the default workspace's
+    /// checkout (one canonical clone shared by all workspaces).
+    #[default]
+    Link,
+    /// Independent clone in the invoking workspace only.
+    Clone,
+    /// Secondary workspaces get nothing.
+    Skip,
+}
+
+/// `[repos]` section: sub-repo materialization options.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReposConfig {
+    /// How secondary jj workspaces see sub-repos.
+    #[serde(default)]
+    pub secondary: SecondaryMode,
+}
+
+/// Loads the `[repos]` section from the local configuration stack. Missing
+/// section yields the default configuration.
+pub fn load_repos_config(
+    local: &jj_lib::config::StackedConfig,
+) -> Result<ReposConfig, jj_lib::config::ConfigGetError> {
+    Ok(local
+        .get::<ReposConfig>("repos")
+        .optional()?
+        .unwrap_or_default())
+}
+
 /// Loads the `[workspace]` section from the local configuration stack.
 /// Missing section yields the default configuration.
 pub fn load_workspace_config(
@@ -195,6 +229,30 @@ mod tests {
 
         assert_eq!(stacked.get::<String>("key").unwrap(), "global");
         assert_eq!(stacked.get::<i64>("only-local").unwrap(), 1);
+    }
+
+    #[test]
+    fn parses_repos_secondary_mode() {
+        let mut local = StackedConfig::empty();
+        local.add_layer(
+            ConfigLayer::parse(ConfigSource::Repo, "[repos]\nsecondary = \"clone\"\n").unwrap(),
+        );
+        assert_eq!(
+            load_repos_config(&local).unwrap().secondary,
+            SecondaryMode::Clone
+        );
+
+        // absent section defaults to link; unknown values are rejected
+        let empty = StackedConfig::empty();
+        assert_eq!(
+            load_repos_config(&empty).unwrap().secondary,
+            SecondaryMode::Link
+        );
+        let mut bad = StackedConfig::empty();
+        bad.add_layer(
+            ConfigLayer::parse(ConfigSource::Repo, "[repos]\nsecondary = \"teleport\"\n").unwrap(),
+        );
+        assert!(load_repos_config(&bad).is_err());
     }
 
     #[test]

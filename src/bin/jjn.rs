@@ -239,7 +239,8 @@ fn cmd_apply(common: CommonArgs, force: bool, quiet: bool) -> ExitCode {
     let mut failed = false;
 
     // Phase 1: sub-repos. Links may point into materialized repos, so repos
-    // come first.
+    // come first. The default workspace holds the canonical checkouts;
+    // secondary workspaces follow [repos].secondary.
     if !repos.is_empty() {
         let mut lock = match RepoLock::load_or_create(&loaded.lock_path()) {
             Ok(lock) => lock,
@@ -248,8 +249,21 @@ fn cmd_apply(common: CommonArgs, force: bool, quiet: bool) -> ExitCode {
                 return ExitCode::FAILURE;
             }
         };
+        let (default_root, others) = match workspace::list(&loaded.root) {
+            Ok(all) => match all.iter().find(|ws| ws.is_default) {
+                Some(default) => (
+                    default.root.clone(),
+                    all.iter()
+                        .filter(|ws| !ws.is_default)
+                        .map(|ws| ws.root.clone())
+                        .collect::<Vec<_>>(),
+                ),
+                None => (loaded.root.clone(), Vec::new()),
+            },
+            Err(_) => (loaded.root.clone(), Vec::new()),
+        };
         for entry in &repos {
-            match repo::apply_one(&loaded.root, entry, &mut lock, false, !quiet) {
+            match repo::apply_one(&default_root, entry, &mut lock, false, !quiet) {
                 Ok(status) => {
                     if !quiet {
                         println!(
@@ -263,6 +277,48 @@ fn cmd_apply(common: CommonArgs, force: bool, quiet: bool) -> ExitCode {
                     eprintln!("{}: {err}", entry.effective_name());
                     failed = true;
                 }
+            }
+        }
+        let secondary_mode = jjunction::config::load_repos_config(&loaded.local)
+            .map(|config| config.secondary)
+            .unwrap_or_default();
+        for other in &others {
+            match secondary_mode {
+                jjunction::config::SecondaryMode::Link => {
+                    for (name, status) in repo::link_secondary(&default_root, other, &repos, force)
+                    {
+                        if !quiet {
+                            println!("{name} [{}]: {status}", other.display());
+                        }
+                        if matches!(
+                            status,
+                            repo::SecondaryStatus::Occupied(_)
+                                | repo::SecondaryStatus::WrongTarget { .. }
+                        ) {
+                            failed = true;
+                        }
+                    }
+                }
+                jjunction::config::SecondaryMode::Clone if other == &loaded.root => {
+                    for entry in &repos {
+                        match repo::apply_one(other, entry, &mut lock, false, !quiet) {
+                            Ok(status) => {
+                                if !quiet {
+                                    println!(
+                                        "{} ({}): {status}",
+                                        entry.effective_name(),
+                                        entry.effective_target()
+                                    );
+                                }
+                            }
+                            Err(err) => {
+                                eprintln!("{}: {err}", entry.effective_name());
+                                failed = true;
+                            }
+                        }
+                    }
+                }
+                _ => {}
             }
         }
         if lock.is_changed()
@@ -408,6 +464,23 @@ fn cmd_doctor(common: CommonArgs) -> ExitCode {
             );
             if !diagnosis.status.is_ok() {
                 problems += 1;
+            }
+        }
+        // Secondary-workspace link health when [repos].secondary = "link".
+        let mode = jjunction::config::load_repos_config(&loaded.local)
+            .map(|config| config.secondary)
+            .unwrap_or_default();
+        if mode == jjunction::config::SecondaryMode::Link
+            && let Ok(all) = workspace::list(&loaded.root)
+            && let Some(default) = all.iter().find(|ws| ws.is_default)
+            && default.root != loaded.root
+        {
+            for (name, status) in repo::check_secondary(&default.root, &loaded.root, &repos) {
+                let mark = if status.is_ok() { "ok" } else { "FAIL" };
+                println!("{name} [secondary]: {mark} {status}");
+                if !status.is_ok() {
+                    problems += 1;
+                }
             }
         }
     }

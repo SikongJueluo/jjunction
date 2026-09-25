@@ -397,6 +397,69 @@ fn doctor_reports_each_status() {
 }
 
 #[test]
+fn link_secondary_shares_the_default_checkout() {
+    let dir = tempfile::tempdir().unwrap();
+    fixture_remote(dir.path());
+    let (_ws, root, entry, _lock) = fixture_workspace(&dir.path().join("remote"));
+    let mut lock = RepoLock::load_or_create(&root.join(".jjunction/lock.toml")).unwrap();
+    apply_one(&root, &entry, &mut lock, false, false).unwrap();
+
+    let secondary = dir.path().join("dev-ws");
+    fs::create_dir_all(&secondary).unwrap();
+
+    let linked = link_secondary(&root, &secondary, std::slice::from_ref(&entry), false);
+    assert_eq!(linked[0].1, SecondaryStatus::Linked);
+    let link = secondary.join(entry.effective_target());
+    assert_eq!(
+        fs::read_link(&link).unwrap(),
+        root.join(entry.effective_target())
+    );
+
+    // idempotent, and check_secondary agrees without touching anything
+    let linked = link_secondary(&root, &secondary, std::slice::from_ref(&entry), false);
+    assert_eq!(linked[0].1, SecondaryStatus::AlreadyLinked);
+    let checked = check_secondary(&root, &secondary, std::slice::from_ref(&entry));
+    assert_eq!(checked[0].1, SecondaryStatus::AlreadyLinked);
+}
+
+#[test]
+fn link_secondary_guards_occupied_and_foreign_links() {
+    let dir = tempfile::tempdir().unwrap();
+    fixture_remote(dir.path());
+    let (_ws, root, entry, mut lock) = fixture_workspace(&dir.path().join("remote"));
+    apply_one(&root, &entry, &mut lock, false, false).unwrap();
+
+    // occupied by a real directory
+    let occupied_ws = dir.path().join("occupied");
+    let occupied_target = occupied_ws.join(entry.effective_target());
+    fs::create_dir_all(&occupied_target).unwrap();
+    let status = link_secondary(&root, &occupied_ws, std::slice::from_ref(&entry), false);
+    assert_eq!(status[0].1, SecondaryStatus::Occupied(occupied_target));
+
+    // link pointing elsewhere: reported, then fixed with force
+    let stray_ws = dir.path().join("stray");
+    let stray_target = stray_ws.join(entry.effective_target());
+    fs::create_dir_all(stray_target.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(dir.path().join("elsewhere"), &stray_target).unwrap();
+    let status = link_secondary(&root, &stray_ws, std::slice::from_ref(&entry), false);
+    assert!(matches!(status[0].1, SecondaryStatus::WrongTarget { .. }));
+    let status = link_secondary(&root, &stray_ws, std::slice::from_ref(&entry), true);
+    assert_eq!(status[0].1, SecondaryStatus::Linked);
+}
+
+#[test]
+fn link_secondary_reports_unmaterialized_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("ws");
+    let secondary = dir.path().join("dev-ws");
+    fs::create_dir_all(&secondary).unwrap();
+    let entry = entry("https://x/y/never.git");
+
+    let status = check_secondary(&root, &secondary, &[entry]);
+    assert_eq!(status[0].1, SecondaryStatus::DefaultMissing);
+}
+
+#[test]
 fn manifest_append_preserves_comments_and_remove_roundtrips() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join(".jjunction/config.toml");

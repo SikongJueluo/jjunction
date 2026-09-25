@@ -116,6 +116,19 @@ git 子进程封装与 gix 读放 `src/repo.rs` 内（量小不拆模块）。
 - 浮动 rev 的远端默认分支变更无法廉价检测（接受；`repo update` 主动刷新）
 - Windows 延后（路径与 symlink 语义）
 
+## 变更（2026-09-25，secondary workspace 共享）
+
+jj 多 workspace 下 sub-repo 之前只物化在默认工作区，secondary 里 `deps/` 缺失。
+修正：`jjn apply` 从任何 workspace 运行都收敛整个拓扑——
+
+- 默认 workspace 永远持有规范 checkout（clone + checkout 到 lock）
+- `[repos] secondary = "link"`（默认）：所有 secondary 的 `<target>` 以**绝对路径
+  symlink** 指向默认工作区对应目录；默认侧未物化时不建链（防 dangling）
+- `secondary = "clone"`：仅调用者所在 workspace 独立 clone（旧行为）；
+  `"skip"`：secondary 不物化
+- doctor 在 link 模式下于 secondary 中追加 `[secondary]` 链接健康检查
+- 各 workspace 根路径需各自通过 trust（与 direnv allow 每目录一放行同构）
+
 ## 变更（2026-09-24，可用性返工）
 
 真实使用暴露的连环坑（trust 无入口、repo add 非原子、无可见性命令、空目录语义

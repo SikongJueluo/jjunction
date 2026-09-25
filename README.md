@@ -19,6 +19,10 @@ A collection of tools for the [Jujutsu](https://github.com/jj-vcs/jj) (jj) versi
 #
 #   [workspace]
 #   allow = "auto"   # direnv allow secondary workspaces when .envrc matches
+#
+#   [repos]
+#   secondary = "link"   # secondary jj workspaces symlink to the default
+                        # workspace's checkout (default; "clone" or "skip")
 
 jjn trust    # trust this workspace (direnv-allow style)
 jjn apply    # materialize repos to locked commits + links + sync workspaces
