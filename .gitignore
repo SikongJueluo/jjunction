@@ -27,6 +27,20 @@ rustc-ice-*.txt
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
+###---------------###
+###  GitHub: Nix  ###
+###---------------###
+
+# Ignore build outputs from performing a nix-build or `nix build` command
+result
+result-*
+
+# Ignore automatically generated direnv output
+.direnv
+
+# Ignore NixOS interactive test driver history
+**/.nixos-test-history
+
 ###--------------------###
 ###  File: /dev/stdin  ###
 ###--------------------###
@@ -34,8 +48,6 @@ rustc-ice-*.txt
 .devenv*
 devenv.local.nix
 devenv.local.yaml
-.direnv
 .pre-commit-config.yaml
 .env
-result
 !Cargo.lock

@@ -65,6 +65,7 @@
   integrations.gitnr.".gitignore" = {
     templates = [
       "gh:Rust"
+      "gh:Nix"
     ];
 
     content = [
