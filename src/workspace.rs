@@ -83,19 +83,22 @@ pub enum FileStatus {
 }
 
 /// What happened to the `direnv allow` step for one workspace.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AllowStatus {
-    /// `direnv allow` executed for this workspace.
-    Allowed,
-    /// Policy is `hint`; the command was printed instead of run.
-    Hinted,
-    /// `.envrc` differs from the default workspace; not auto-allowed.
-    EnvrcMismatch,
+    /// The allow command executed for this workspace (`direnv`/`devenv`).
+    Allowed(&'static str),
+    /// Policy is `hint`; the command to run is carried in the status.
+    Hinted(String),
+    /// The activation file differs from the default workspace; not
+    /// auto-allowed.
+    Mismatch(&'static str),
     /// Policy is `never`.
     Disabled,
     /// `direnv` is not available in `PATH`.
     DirenvMissing,
-    /// No `.envrc` to allow.
+    /// `devenv` is not available in `PATH`.
+    DevenvMissing,
+    /// No activation gate applies (neither `.envrc` nor devenv files).
     NotApplicable,
 }
 
@@ -120,11 +123,12 @@ impl fmt::Display for FileStatus {
 impl fmt::Display for AllowStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Allowed => write!(f, "allowed"),
-            Self::Hinted => write!(f, "hint: run direnv allow <workspace>"),
-            Self::EnvrcMismatch => write!(f, ".envrc differs from default workspace, not allowed"),
+            Self::Allowed(tool) => write!(f, "allowed ({tool})"),
+            Self::Hinted(command) => write!(f, "hint: {command}"),
+            Self::Mismatch(file) => write!(f, "{file} differs from default workspace, not allowed"),
             Self::Disabled => write!(f, "allow disabled"),
             Self::DirenvMissing => write!(f, "direnv not found in PATH"),
+            Self::DevenvMissing => write!(f, "devenv not found in PATH"),
             Self::NotApplicable => write!(f, "no .envrc"),
         }
     }
@@ -253,38 +257,73 @@ fn replace_link(source: &Path, destination: &Path) -> std::io::Result<()> {
     symlink(source, destination)
 }
 
-/// Runs (or hints) `direnv allow <root>`, gated on `.envrc` being identical
-/// to the default workspace's copy: allowing an unmodified copy of already
-/// trusted content is safe, allowing arbitrary repo content is not.
+/// Runs (or hints) the activation gate for this workspace — **exactly one**
+/// of `direnv allow` / `devenv allow`. devenv activates through its own
+/// subshell by default and still supports direnv; whichever the workspace
+/// actually uses gets allowed, with direnv taking priority when both are
+/// present. Either way the gate is content-identity: allowing an unmodified
+/// copy of already-trusted content is safe, allowing arbitrary repo content
+/// is not.
 fn apply_allow(
     default_root: &Path,
     root: &Path,
     policy: crate::config::AllowPolicy,
 ) -> AllowStatus {
+    // direnv activation: an .envrc on both sides.
     let default_envrc = default_root.join(".envrc");
-    let workspace_envrc = root.join(".envrc");
-    if !default_envrc.is_file() || !workspace_envrc.exists() {
-        return AllowStatus::NotApplicable;
+    if default_envrc.is_file() && root.join(".envrc").exists() {
+        let identical = reads_equal(&default_envrc, &root.join(".envrc"));
+        return match policy {
+            crate::config::AllowPolicy::Never => AllowStatus::Disabled,
+            crate::config::AllowPolicy::Hint => {
+                AllowStatus::Hinted(format!("direnv allow {}", root.display()))
+            }
+            crate::config::AllowPolicy::Auto => {
+                if !identical {
+                    return AllowStatus::Mismatch(".envrc");
+                }
+                let status = Command::new("direnv")
+                    .arg("allow")
+                    .arg(root)
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status();
+                match status {
+                    Ok(exit) if exit.success() => AllowStatus::Allowed("direnv"),
+                    Ok(_) => AllowStatus::Mismatch(".envrc"),
+                    Err(_) => AllowStatus::DirenvMissing,
+                }
+            }
+        };
     }
 
-    let identical = reads_equal(&default_envrc, &workspace_envrc);
+    // devenv-subshell activation: devenv files on both sides, no .envrc.
+    let gate = ["devenv.nix", "devenv.yaml"]
+        .into_iter()
+        .find(|file| default_root.join(file).is_file() && root.join(file).exists());
+    let Some(file) = gate else {
+        return AllowStatus::NotApplicable;
+    };
+    let identical = reads_equal(&default_root.join(file), &root.join(file));
     match policy {
         crate::config::AllowPolicy::Never => AllowStatus::Disabled,
-        crate::config::AllowPolicy::Hint => AllowStatus::Hinted,
+        crate::config::AllowPolicy::Hint => {
+            AllowStatus::Hinted(format!("devenv allow (in {})", root.display()))
+        }
         crate::config::AllowPolicy::Auto => {
             if !identical {
-                return AllowStatus::EnvrcMismatch;
+                return AllowStatus::Mismatch(file);
             }
-            let status = Command::new("direnv")
+            let status = Command::new("devenv")
                 .arg("allow")
-                .arg(root)
+                .current_dir(root)
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .status();
             match status {
-                Ok(exit) if exit.success() => AllowStatus::Allowed,
-                Ok(_) => AllowStatus::EnvrcMismatch,
-                Err(_) => AllowStatus::DirenvMissing,
+                Ok(exit) if exit.success() => AllowStatus::Allowed("devenv"),
+                Ok(_) => AllowStatus::Mismatch(file),
+                Err(_) => AllowStatus::DevenvMissing,
             }
         }
     }

@@ -103,7 +103,7 @@ fn allow_gated_on_identical_envrc() {
     assert_eq!(reports[0].files[0].1, FileStatus::Linked);
     assert!(matches!(
         reports[0].allow,
-        AllowStatus::Allowed | AllowStatus::DirenvMissing
+        AllowStatus::Allowed("direnv") | AllowStatus::DirenvMissing
     ));
 
     // workspace with a diverging .envrc of its own: tracked, never allowed
@@ -116,7 +116,67 @@ fn allow_gated_on_identical_envrc() {
         false,
     );
     assert_eq!(reports[0].files[0].1, FileStatus::Tracked);
-    assert_eq!(reports[0].allow, AllowStatus::EnvrcMismatch);
+    assert_eq!(reports[0].allow, AllowStatus::Mismatch(".envrc"));
+}
+
+#[test]
+fn allow_devenv_subshell_projects() {
+    // no .envrc anywhere: devenv.nix becomes the gate (sync links it over,
+    // so the copies are byte-identical by construction)
+    let (_dir, main, other) = setup();
+    fs::remove_file(main.join(".envrc")).unwrap();
+    let reports = sync_workspaces(
+        &main,
+        std::slice::from_ref(&other),
+        &config(AllowPolicy::Hint),
+        false,
+    );
+    let AllowStatus::Hinted(command) = &reports[0].allow else {
+        panic!("expected devenv hint, got {:?}", reports[0].allow);
+    };
+    assert!(command.contains("devenv allow"), "hint was: {command}");
+
+    // auto mode: allowed, or devenv is simply not on PATH in this test
+    let (_dir, main, other) = setup();
+    fs::remove_file(main.join(".envrc")).unwrap();
+    let reports = sync_workspaces(
+        &main,
+        std::slice::from_ref(&other),
+        &config(AllowPolicy::Auto),
+        false,
+    );
+    assert!(matches!(
+        reports[0].allow,
+        AllowStatus::Allowed("devenv") | AllowStatus::DevenvMissing
+    ));
+
+    // diverging devenv.nix of its own: tracked, never auto-allowed
+    let (_dir, main, other) = setup();
+    fs::remove_file(main.join(".envrc")).unwrap();
+    write(&other.join("devenv.nix"), "{ packages = [ ]; }\n");
+    let reports = sync_workspaces(
+        &main,
+        std::slice::from_ref(&other),
+        &config(AllowPolicy::Auto),
+        false,
+    );
+    assert_eq!(reports[0].allow, AllowStatus::Mismatch("devenv.nix"));
+}
+
+#[test]
+fn allow_prefers_direnv_when_both_present() {
+    // default setup has .envrc and devenv.nix: direnv wins, one gate only
+    let (_dir, main, other) = setup();
+    let reports = sync_workspaces(
+        &main,
+        std::slice::from_ref(&other),
+        &config(AllowPolicy::Hint),
+        false,
+    );
+    let AllowStatus::Hinted(command) = &reports[0].allow else {
+        panic!("expected a hint, got {:?}", reports[0].allow);
+    };
+    assert!(command.contains("direnv allow"), "hint was: {command}");
 }
 
 #[test]
@@ -128,7 +188,7 @@ fn allow_hint_and_disabled() {
         &config(AllowPolicy::Hint),
         false,
     );
-    assert_eq!(reports[0].allow, AllowStatus::Hinted);
+    assert!(matches!(reports[0].allow, AllowStatus::Hinted(_)));
 
     let reports = sync_workspaces(
         &main,

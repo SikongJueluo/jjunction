@@ -18,7 +18,8 @@ A collection of tools for the [Jujutsu](https://github.com/jj-vcs/jj) (jj) versi
 #   rev = "main"                               # branch/tag/sha; default: floating
 #
 #   [workspace]
-#   allow = "auto"   # direnv allow secondary workspaces when .envrc matches
+#   allow = "auto"   # auto-allow secondary workspaces: direnv when .envrc is
+                     # used (byte-identical gate), devenv allow otherwise
 #
 #   [repos]
 #   secondary = "link"   # secondary jj workspaces symlink to the default
