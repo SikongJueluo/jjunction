@@ -100,3 +100,18 @@ TOML 分层 + 白名单选择器表达（选择，不是计算）：
   （D1），Nix eval = 任意代码执行，与一次性 trust 门 + 每 prompt 后台
   apply 的反应环冲突；需要 Nix 表达力时由 home-manager 生成 inert TOML
   （Nix 作生成器，不作格式），后续另记
+
+## 配置 JSON Schema（2026-10-02 补充）
+
+- `docs/schema/config.schema.json` 由 schemars 从运行时**同一组 serde
+  类型**（`LinkEntry` / `RepoEntry` / `WorkspaceConfig` / `ReposConfig`）
+  生成（`src/config/schema.rs`，test-only，schemars 为 dev-dependency），
+  单测断言 checked-in 文件与生成结果一致——**防漂移**；`just schema`
+  再生成（`UPDATE_SCHEMA=1 cargo test schema`）
+- `jjn init` 幂等写入 taplo `#:schema` 指令（指向 main 分支 raw URL），
+  任意已存在的 `#:schema` 行（含指向 fork/本地的）视为用户选择不覆盖
+- 根对象 `additionalProperties: false`，与各子结构 deny_unknown_fields
+  哲学一致：该文件归 jjunction 所有，顶层键拼错应当被标出
+- 全局配置 schema（`machine` / `trusted-repos` 两键）手写于
+  `docs/schema/global.schema.json`：键少、读取点分散，生成收益不抵
+  重构成本；改 trust.rs / resolve_machine 时同步更新

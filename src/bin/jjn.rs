@@ -560,6 +560,7 @@ fn cmd_init(common: CommonArgs) -> ExitCode {
     match hooks::init(&root) {
         Ok(report) => {
             println!(".jjunction/config.toml: {}", report.config);
+            println!(".jjunction/config.toml #:schema: {}", report.schema);
             println!(".envrc: {}", report.envrc);
             println!("devenv.local.nix: {}", report.devenv_local);
             if report.devenv_local == hooks::WireStatus::Skipped {

@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "jjunction global config",
+  "description": "~/.config/jjunction/config.toml — per-machine settings. Hand-maintained (two keys, scattered call sites): update together with src/config/trust.rs (trusted-repos) and resolve_machine (machine).",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "machine": {
+      "type": "string",
+      "description": "Machine identity overriding the hostname for `machines = [...]` selectors. Normalized on use: trimmed, trailing dot dropped, lowercased; FQDNs must be listed in full."
+    },
+    "trusted-repos": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Workspace roots allowed to apply [[repo]] and [[link]] entries (direnv-allow style; appended by `jjn trust`)."
+    }
+  }
+}

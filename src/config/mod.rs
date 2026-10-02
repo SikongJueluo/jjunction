@@ -22,6 +22,9 @@ pub mod global;
 pub mod local;
 pub mod trust;
 
+#[cfg(test)]
+mod schema;
+
 use std::path::Path;
 
 use jj_lib::config::ConfigGetResultExt as _;
@@ -107,7 +110,8 @@ pub trait ConfigReader {
 }
 
 /// How `jjn` deals with `direnv allow` for non-default workspaces.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum AllowPolicy {
     /// Run `direnv allow <workspace>` when `.envrc` matches the default
@@ -122,6 +126,7 @@ pub enum AllowPolicy {
 
 /// `[workspace]` section: cross-workspace file sync configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Deserialize)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct WorkspaceConfig {
     /// Files mirrored from the default workspace into every other workspace.
@@ -145,7 +150,8 @@ impl WorkspaceConfig {
 }
 
 /// How secondary jj workspaces materialize `[[repo]]` entries.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum SecondaryMode {
     /// Symlink each secondary workspace's target to the default workspace's
@@ -160,6 +166,7 @@ pub enum SecondaryMode {
 
 /// `[repos]` section: sub-repo materialization options.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct ReposConfig {
     /// How secondary jj workspaces see sub-repos.
@@ -192,7 +199,8 @@ pub fn load_workspace_config(
 /// Resolves the machine identity used by `machines = [...]` selectors
 /// (see `crate::link`). Priority: `--machine` CLI override, then the
 /// global `machine` key, then the hostname. The result is normalized by
-/// [`normalize_machine`].
+/// [`normalize_machine`]. The global keys are mirrored by
+/// `docs/schema/global.schema.json` — keep it in sync.
 pub fn resolve_machine(global: &StackedConfig, cli: Option<&str>) -> String {
     let raw = cli
         .map(str::to_owned)

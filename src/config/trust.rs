@@ -7,6 +7,9 @@
 //!
 //! [`trust`] is the one-command onboarding path (the direnv-allow model):
 //! `jjn trust` appends the current workspace root to `trusted-repos`.
+//!
+//! The global config's keys (`machine`, `trusted-repos`) are mirrored by
+//! `docs/schema/global.schema.json` — keep the two in sync when adding keys.
 
 use std::fs;
 use std::io;

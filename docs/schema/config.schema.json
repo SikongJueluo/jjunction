@@ -1,0 +1,196 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": ".jjunction/config.toml — the project manifest. Declarative and untrusted until `jjn trust` (see docs/design/config.md). Editors: a `#:schema` directive is stamped by `jjn init`.",
+  "properties": {
+    "link": {
+      "$defs": {
+        "LinkEntry": {
+          "additionalProperties": false,
+          "description": "One `[[link]]` entry.",
+          "properties": {
+            "machines": {
+              "description": "Machine names this entry applies to (compared normalized, see\n[`crate::config::normalize_machine`]); absent = every machine.",
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "source": {
+              "description": "Real file or directory the link points to.",
+              "type": "string"
+            },
+            "target": {
+              "description": "Link location, relative to the workspace root.",
+              "type": "string"
+            },
+            "type": {
+              "$ref": "#/$defs/LinkType",
+              "description": "Entry kind; currently only `link`."
+            },
+            "workspaces": {
+              "description": "jj workspace names this entry applies to; absent = every workspace.",
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "source",
+            "target",
+            "type"
+          ],
+          "type": "object"
+        },
+        "LinkType": {
+          "description": "How an entry materializes on disk. Only `link` for now.",
+          "oneOf": [
+            {
+              "const": "link",
+              "description": "A symbolic link.",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "items": {
+        "$ref": "#/$defs/LinkEntry"
+      },
+      "title": "Array_of_LinkEntry",
+      "type": "array"
+    },
+    "repo": {
+      "$defs": {
+        "RepoEntry": {
+          "additionalProperties": false,
+          "description": "One `[[repo]]` entry. `name` defaults to the url basename minus `.git`;\n`target` defaults to `name` and is relative to the workspace root; `rev`\ndefaults to floating (follows the remote's default branch).",
+          "properties": {
+            "name": {
+              "description": "Explicit entry name; defaults to the url basename.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "rev": {
+              "description": "Branch, tag, or full commit id; absent = follow the default branch.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "target": {
+              "description": "Materialization path, relative to the workspace root.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "url": {
+              "description": "Clone url.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "url"
+          ],
+          "type": "object"
+        }
+      },
+      "items": {
+        "$ref": "#/$defs/RepoEntry"
+      },
+      "title": "Array_of_RepoEntry",
+      "type": "array"
+    },
+    "repos": {
+      "$defs": {
+        "SecondaryMode": {
+          "description": "How secondary jj workspaces materialize `[[repo]]` entries.",
+          "oneOf": [
+            {
+              "const": "link",
+              "description": "Symlink each secondary workspace's target to the default workspace's\ncheckout (one canonical clone shared by all workspaces).",
+              "type": "string"
+            },
+            {
+              "const": "clone",
+              "description": "Independent clone in the invoking workspace only.",
+              "type": "string"
+            },
+            {
+              "const": "skip",
+              "description": "Secondary workspaces get nothing.",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "description": "`[repos]` section: sub-repo materialization options.",
+      "properties": {
+        "secondary": {
+          "$ref": "#/$defs/SecondaryMode",
+          "default": "link",
+          "description": "How secondary jj workspaces see sub-repos."
+        }
+      },
+      "title": "ReposConfig",
+      "type": "object"
+    },
+    "workspace": {
+      "$defs": {
+        "AllowPolicy": {
+          "description": "How `jjn` deals with `direnv allow` for non-default workspaces.",
+          "oneOf": [
+            {
+              "const": "auto",
+              "description": "Run `direnv allow <workspace>` when `.envrc` matches the default\nworkspace's copy byte for byte.",
+              "type": "string"
+            },
+            {
+              "const": "hint",
+              "description": "Print the `direnv allow` command without running it.",
+              "type": "string"
+            },
+            {
+              "const": "never",
+              "description": "Do nothing.",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "description": "`[workspace]` section: cross-workspace file sync configuration.",
+      "properties": {
+        "allow": {
+          "$ref": "#/$defs/AllowPolicy",
+          "default": "hint",
+          "description": "`direnv allow` policy for non-default workspaces."
+        },
+        "sync": {
+          "description": "Files mirrored from the default workspace into every other workspace.\nDefaults to the devenv/direnv set ([`crate::workspace::DEFAULT_SYNC_FILES`]).",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "title": "WorkspaceConfig",
+      "type": "object"
+    }
+  },
+  "title": "jjunction local config",
+  "type": "object"
+}

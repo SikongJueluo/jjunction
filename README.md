@@ -81,6 +81,31 @@ jjn init
 With that, `jj workspace add …` or a config edit re-syncs everything at the
 next prompt — no daemon required.
 
+## Editor support
+
+`.jjunction/config.toml` has a [JSON Schema](docs/schema/config.schema.json)
+(taplo / Even Better TOML / Zed / nvim): validation, completion, and inline
+docs for every key. `jjn init` stamps the `#:schema` directive as the first
+line (any directive you placed yourself is left alone); manually:
+
+```toml
+#:schema https://raw.githubusercontent.com/sikongjueluo/jjunction/main/docs/schema/config.schema.json
+```
+
+The schema is **generated from the same serde types the binary
+deserializes with**, and a test fails when the checked-in file drifts —
+regenerate with `just schema`. A hand-maintained
+[global schema](docs/schema/global.schema.json) covers
+`~/.config/jjunction/config.toml` (`machine`, `trusted-repos`); associate
+both without touching each repo via `~/.config/taplo/taplo.toml`:
+
+```toml
+[[rule]]
+include = ["**/.jjunction/config.toml"]
+[rule.schema]
+url = "https://raw.githubusercontent.com/sikongjueluo/jjunction/main/docs/schema/config.schema.json"
+```
+
 ## Installation
 
 NixOS / Home Manager (flakes):

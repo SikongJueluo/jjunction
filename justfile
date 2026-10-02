@@ -20,3 +20,7 @@ fmt:
 # Lint with clippy
 lint:
     cargo clippy --all-targets -- -D warnings
+
+# Regenerate docs/schema/config.schema.json from the serde types
+schema:
+    UPDATE_SCHEMA=1 cargo test schema

@@ -27,9 +27,11 @@ use jj_lib::config::ConfigGetError;
 use jj_lib::config::ConfigGetResultExt as _;
 use jj_lib::config::StackedConfig;
 use serde::Deserialize;
+use serde::Serialize;
 
 /// How an entry materializes on disk. Only `link` for now.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum LinkType {
     /// A symbolic link.
@@ -38,6 +40,7 @@ pub enum LinkType {
 
 /// One `[[link]]` entry.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct LinkEntry {
     /// Real file or directory the link points to.

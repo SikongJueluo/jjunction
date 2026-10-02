@@ -47,6 +47,7 @@ use crate::lock::RepoLock;
 /// `target` defaults to `name` and is relative to the workspace root; `rev`
 /// defaults to floating (follows the remote's default branch).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct RepoEntry {
     /// Explicit entry name; defaults to the url basename.

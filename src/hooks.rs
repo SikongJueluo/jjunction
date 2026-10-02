@@ -26,6 +26,12 @@ use crate::config::LOCAL_CONFIG_FILE;
 const MARK_BEGIN: &str = "# jjunction:begin (managed by `jjn init`; edits inside are lost)";
 const MARK_END: &str = "# jjunction:end";
 
+/// Taplo (Even Better TOML / Zed / nvim-taplo) `#:schema` target for the
+/// local config — the checked-in schema on the default branch, generated
+/// from the serde types by `src/config/schema.rs`.
+const SCHEMA_URL: &str =
+    "https://raw.githubusercontent.com/sikongjueluo/jjunction/main/docs/schema/config.schema.json";
+
 const ENVRC_BLOCK: &str = "\
 # Re-sync jj workspaces and jjunction state at the next prompt.
 # (only the default workspace has a .jj/repo directory)
@@ -110,6 +116,8 @@ impl From<std::io::Error> for HooksError {
 pub struct InitReport {
     /// `.jjunction/config.toml` creation status.
     pub config: WireStatus,
+    /// `#:schema` directive status in `.jjunction/config.toml`.
+    pub schema: WireStatus,
     /// `.envrc` managed block status.
     pub envrc: WireStatus,
     /// `devenv.local.nix` hook status.
@@ -119,10 +127,12 @@ pub struct InitReport {
 /// Wires the workspace reaction loop (idempotent, marker-scoped).
 pub fn init(root: &Path) -> Result<InitReport, HooksError> {
     let config = ensure_config(root)?;
+    let schema = wire_schema_directive(root)?;
     let envrc = wire_envrc(root)?;
     let devenv_local = wire_devenv_local(root)?;
     Ok(InitReport {
         config,
+        schema,
         envrc,
         devenv_local,
     })
@@ -137,6 +147,30 @@ fn ensure_config(root: &Path) -> Result<WireStatus, HooksError> {
     }
     fs::create_dir_all(&dir)?;
     fs::write(&path, "")?;
+    Ok(WireStatus::Created)
+}
+
+/// Ensures `.jjunction/config.toml` starts with the taplo `#:schema`
+/// directive. Any existing directive — including a foreign one pointing at
+/// a fork or vendored copy — is respected as a deliberate user choice.
+fn wire_schema_directive(root: &Path) -> Result<WireStatus, HooksError> {
+    let dir = root.join(LOCAL_CONFIG_DIR);
+    let path = dir.join(LOCAL_CONFIG_FILE);
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            fs::create_dir_all(&dir)?;
+            String::new()
+        }
+        Err(err) => return Err(err.into()),
+    };
+    if text
+        .lines()
+        .any(|line| line.trim_start().starts_with("#:schema"))
+    {
+        return Ok(WireStatus::AlreadyWired);
+    }
+    fs::write(&path, format!("#:schema {SCHEMA_URL}\n{text}"))?;
     Ok(WireStatus::Created)
 }
 
@@ -321,6 +355,62 @@ mod tests {
             fs::read_to_string(root.join("devenv.local.nix"))
                 .unwrap()
                 .contains("hello")
+        );
+    }
+
+    #[test]
+    fn init_writes_schema_directive() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        let report = init(root).unwrap();
+        assert_eq!(report.schema, WireStatus::Created);
+
+        let path = root.join(".jjunction").join("config.toml");
+        let text = fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            text,
+            format!("#:schema {SCHEMA_URL}\n"),
+            "fresh config carries only the directive"
+        );
+
+        // Idempotent: a second run changes nothing.
+        assert_eq!(init(root).unwrap().schema, WireStatus::AlreadyWired);
+        assert_eq!(fs::read_to_string(&path).unwrap(), text);
+    }
+
+    #[test]
+    fn init_prepends_directive_above_user_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let dir_path = root.join(".jjunction");
+        fs::create_dir_all(&dir_path).unwrap();
+        fs::write(
+            dir_path.join("config.toml"),
+            "[repos]\nsecondary = \"clone\"\n",
+        )
+        .unwrap();
+
+        assert_eq!(init(root).unwrap().schema, WireStatus::Created);
+        let text = fs::read_to_string(dir_path.join("config.toml")).unwrap();
+        assert!(text.starts_with("#:schema "));
+        assert!(text.ends_with("secondary = \"clone\"\n"));
+        assert_eq!(init(root).unwrap().schema, WireStatus::AlreadyWired);
+    }
+
+    #[test]
+    fn init_respects_foreign_schema_directive() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let dir_path = root.join(".jjunction");
+        fs::create_dir_all(&dir_path).unwrap();
+        let original = "#:schema ./vendor/jjunction.schema.json\n[[link]]\n";
+        fs::write(dir_path.join("config.toml"), original).unwrap();
+
+        assert_eq!(init(root).unwrap().schema, WireStatus::AlreadyWired);
+        assert_eq!(
+            fs::read_to_string(dir_path.join("config.toml")).unwrap(),
+            original
         );
     }
 
