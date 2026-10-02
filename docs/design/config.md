@@ -78,3 +78,25 @@ jjunction 有两层配置：全局（用户级）与项目本地（per-repo）�
   devenv.local.nix 的 enterShell 钩子，见 `src/hooks.rs`）；doctor 会报告未接线状态
 - 后手：`jjn watch` daemon（notify 监听 index/config/各 workspace 根，防抖后 apply），
   适用于纯 agent 建仓或链接自愈需求，暂不实施
+
+## 按机器与工作区选择（2026-10-02 补充）
+
+需求：`[[link]]` 按机器/按 workspace 区分。结论：不引入新配置语言，
+TOML 分层 + 白名单选择器表达（选择，不是计算）：
+
+- `[[link]]` 新增可选 `workspaces = [...]` 与 `machines = [...]`；
+  **缺省 = 全部匹配**（默认全开，向后兼容）
+- 机器身份优先级：`--machine` CLI > 全局 `machine` 键 > hostname
+  （whoami 读 `gethostname(3)`，兜底 `$HOSTNAME`，再兜底 `"unknown"`）
+  - hostname 作默认检测的权衡：NixOS 上 `networking.hostName` 显式声明、
+    天然稳定；但泛化名/改名机器存在，故保留两个显式覆盖通道
+  - 规范化：trim、去尾部 `.`、小写；FQDN 需列全（`box` 与 `box.example.org`
+    是两个身份）
+- workspace 身份 = 当前 root 在 jj workspace_store 中的名字（default
+  workspace 名为 `default`；大小写敏感，与 jj 标识符一致）；无法确定
+  （根无 `.jj`）时 scoped 条目跳过并给出原因，不报错
+- `apply` 打印 `skipped (原因)`，`doctor` 以 `--` 标记，均不计入失败
+- 为什么不是 Nix 作 canonical 格式：本地层是 untrusted 安全声明式子集
+  （D1），Nix eval = 任意代码执行，与一次性 trust 门 + 每 prompt 后台
+  apply 的反应环冲突；需要 Nix 表达力时由 home-manager 生成 inert TOML
+  （Nix 作生成器，不作格式），后续另记

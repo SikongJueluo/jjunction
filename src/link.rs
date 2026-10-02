@@ -8,6 +8,13 @@
 //!
 //! `type` is `link` today; future kinds (copy, hardlink, template, …) will
 //! extend [`LinkType`].
+//!
+//! Entries may be scoped with two optional whitelist selectors, both
+//! default-on (absent = applies everywhere): `workspaces` (jj workspace
+//! names, case-sensitive; the default workspace is named `default`) and
+//! `machines` (machine identities resolved by
+//! [`crate::config::resolve_machine`], compared normalized). See
+//! [`skip_reason`].
 
 use std::fmt;
 use std::fs;
@@ -40,6 +47,11 @@ pub struct LinkEntry {
     /// Entry kind; currently only `link`.
     #[serde(rename = "type")]
     pub link_type: LinkType,
+    /// jj workspace names this entry applies to; absent = every workspace.
+    pub workspaces: Option<Vec<String>>,
+    /// Machine names this entry applies to (compared normalized, see
+    /// [`crate::config::normalize_machine`]); absent = every machine.
+    pub machines: Option<Vec<String>>,
 }
 
 /// Outcome of applying one entry.
@@ -174,6 +186,84 @@ pub fn load_entries(local: &StackedConfig) -> Result<Vec<LinkEntry>, ConfigGetEr
         .unwrap_or_default())
 }
 
+/// Why an entry does not apply on this machine / in this workspace.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SkipReason {
+    /// The machine identity is not in `machines`.
+    Machine {
+        /// Current machine identity (already normalized).
+        current: String,
+        /// Configured selector values, verbatim.
+        allowed: Vec<String>,
+    },
+    /// The workspace is not in `workspaces`, or could not be determined.
+    Workspace {
+        /// Current workspace name, when determinable.
+        current: Option<String>,
+        /// Configured selector values, verbatim.
+        allowed: Vec<String>,
+    },
+}
+
+impl fmt::Display for SkipReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Machine { current, allowed } => {
+                write!(f, "machine {current:?} not in {allowed:?}")
+            }
+            Self::Workspace {
+                current: Some(current),
+                allowed,
+            } => write!(f, "workspace {current:?} not in {allowed:?}"),
+            Self::Workspace {
+                current: None,
+                allowed,
+            } => write!(f, "workspace undeterminable, entry scoped to {allowed:?}"),
+        }
+    }
+}
+
+/// Returns `true` when `entry` applies in `workspace` on `machine`.
+/// Absent selectors match everything (default-on).
+pub fn in_scope(entry: &LinkEntry, workspace: Option<&str>, machine: &str) -> bool {
+    skip_reason(entry, workspace, machine).is_none()
+}
+
+/// Returns why `entry` is skipped here, or `None` when it applies.
+///
+/// Machine names are normalized on both sides
+/// ([`crate::config::normalize_machine`]); [`crate::config::resolve_machine`]
+/// returns an already-normalized identity. Workspace names compare exactly —
+/// jj workspace names are user-chosen, case-sensitive identifiers. An entry
+/// scoped to workspaces is skipped when the current workspace name cannot
+/// be determined (no `.jj` at the root).
+pub fn skip_reason(
+    entry: &LinkEntry,
+    workspace: Option<&str>,
+    machine: &str,
+) -> Option<SkipReason> {
+    let machine = crate::config::normalize_machine(machine);
+    if let Some(allowed) = &entry.machines
+        && !allowed
+            .iter()
+            .any(|name| crate::config::normalize_machine(name) == machine)
+    {
+        return Some(SkipReason::Machine {
+            current: machine,
+            allowed: allowed.clone(),
+        });
+    }
+    if let Some(allowed) = &entry.workspaces
+        && !workspace.is_some_and(|current| allowed.iter().any(|name| name == current))
+    {
+        return Some(SkipReason::Workspace {
+            current: workspace.map(str::to_owned),
+            allowed: allowed.clone(),
+        });
+    }
+    None
+}
+
 /// Applies one entry: creates the symlink, or reports why it cannot.
 pub fn apply_one(root: &Path, entry: &LinkEntry, force: bool) -> Result<ApplyStatus, LinkError> {
     if !target_within_root(&entry.target) {
@@ -289,6 +379,8 @@ mod tests {
             source: source.to_owned(),
             target: target.to_owned(),
             link_type: LinkType::Link,
+            workspaces: None,
+            machines: None,
         }
     }
 
@@ -464,5 +556,72 @@ mod tests {
     fn load_entries_empty_when_absent() {
         let local = StackedConfig::empty();
         assert!(load_entries(&local).unwrap().is_empty());
+    }
+
+    #[test]
+    fn selectors_default_to_everything() {
+        let e = entry("a", "b");
+        assert!(in_scope(&e, None, "whatever"));
+        assert!(in_scope(&e, Some("default"), "minisforum"));
+        assert_eq!(skip_reason(&e, None, "whatever"), None);
+    }
+
+    #[test]
+    fn machine_selector_compares_normalized() {
+        let mut e = entry("a", "b");
+        e.machines = Some(vec!["Minisforum.".to_owned(), "Laptop".to_owned()]);
+
+        assert!(in_scope(&e, Some("ws"), "minisforum"));
+        assert!(in_scope(&e, Some("ws"), "LAPTOP"));
+        assert!(!in_scope(&e, Some("ws"), "tablet"));
+
+        assert_eq!(
+            skip_reason(&e, Some("ws"), "tablet").unwrap().to_string(),
+            "machine \"tablet\" not in [\"Minisforum.\", \"Laptop\"]"
+        );
+    }
+
+    #[test]
+    fn workspace_selector_requires_known_name() {
+        let mut e = entry("a", "b");
+        e.workspaces = Some(vec!["feat-x".to_owned(), "default".to_owned()]);
+
+        assert!(in_scope(&e, Some("feat-x"), "m"));
+        assert!(!in_scope(&e, Some("feat-y"), "m")); // case-sensitive identifiers
+        assert!(!in_scope(&e, None, "m")); // undeterminable -> scoped entries skip
+
+        assert_eq!(
+            skip_reason(&e, None, "m").unwrap().to_string(),
+            "workspace undeterminable, entry scoped to [\"feat-x\", \"default\"]"
+        );
+    }
+
+    #[test]
+    fn load_entries_parses_selectors() {
+        let mut local = StackedConfig::empty();
+        local.add_layer(
+            jj_lib::config::ConfigLayer::parse(
+                jj_lib::config::ConfigSource::Repo,
+                r#"
+                [[link]]
+                source = "assets/a"
+                target = "links/a"
+                type = "link"
+                workspaces = ["feat-x"]
+                machines = ["minisforum"]
+                "#,
+            )
+            .unwrap(),
+        );
+
+        let entries = load_entries(&local).unwrap();
+        assert_eq!(
+            entries[0].workspaces.as_deref(),
+            Some(&["feat-x".to_owned()][..])
+        );
+        assert_eq!(
+            entries[0].machines.as_deref(),
+            Some(&["minisforum".to_owned()][..])
+        );
     }
 }

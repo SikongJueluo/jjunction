@@ -120,6 +120,10 @@ struct CommonArgs {
     /// Path to the global config file
     #[arg(long)]
     global_config: Option<PathBuf>,
+    /// Machine identity for `machines = [...]` selectors (default: the
+    /// global `machine` key, else the hostname)
+    #[arg(long)]
+    machine: Option<String>,
 }
 
 fn main() -> ExitCode {
@@ -238,6 +242,16 @@ fn cmd_apply(common: CommonArgs, force: bool, quiet: bool) -> ExitCode {
 
     let mut failed = false;
 
+    // Selector context, computed once for all phases: the machine identity
+    // and the name of the workspace we were invoked in.
+    let machine = jjunction::config::resolve_machine(&loaded.global, common.machine.as_deref());
+    let ws_list = workspace::list(&loaded.root);
+    let ws_name = ws_list
+        .as_ref()
+        .ok()
+        .and_then(|all| all.iter().find(|ws| ws.root == loaded.root))
+        .map(|ws| ws.name.clone());
+
     // Phase 1: sub-repos. Links may point into materialized repos, so repos
     // come first. The default workspace holds the canonical checkouts;
     // secondary workspaces follow [repos].secondary.
@@ -249,7 +263,7 @@ fn cmd_apply(common: CommonArgs, force: bool, quiet: bool) -> ExitCode {
                 return ExitCode::FAILURE;
             }
         };
-        let (default_root, others) = match workspace::list(&loaded.root) {
+        let (default_root, others) = match &ws_list {
             Ok(all) => match all.iter().find(|ws| ws.is_default) {
                 Some(default) => (
                     default.root.clone(),
@@ -329,13 +343,19 @@ fn cmd_apply(common: CommonArgs, force: bool, quiet: bool) -> ExitCode {
         }
     }
 
-    // Phase 2: links.
+    // Phase 2: links, filtered by workspaces/machines selectors.
     if entries.is_empty() {
         if !quiet {
             println!("no [[link]] entries");
         }
     } else {
         for entry in &entries {
+            if let Some(reason) = link::skip_reason(entry, ws_name.as_deref(), &machine) {
+                if !quiet {
+                    println!("{}: skipped ({reason})", entry.target);
+                }
+                continue;
+            }
             match link::apply_one(&loaded.root, entry, force) {
                 Ok(status) => {
                     if !quiet {
@@ -351,7 +371,7 @@ fn cmd_apply(common: CommonArgs, force: bool, quiet: bool) -> ExitCode {
     }
 
     // Phase 3: cross-workspace sync (main → others).
-    match workspace::list(&loaded.root) {
+    match &ws_list {
         Ok(all) if all.len() > 1 => {
             let Some(default) = all.iter().find(|ws| ws.is_default) else {
                 eprintln!("warning: workspace sync skipped: no default workspace found");
@@ -442,6 +462,15 @@ fn cmd_doctor(common: CommonArgs) -> ExitCode {
         return exit_code(problems > 0);
     }
 
+    // Selector context, mirroring cmd_apply.
+    let machine = jjunction::config::resolve_machine(&loaded.global, common.machine.as_deref());
+    let ws_list = workspace::list(&loaded.root);
+    let ws_name = ws_list
+        .as_ref()
+        .ok()
+        .and_then(|all| all.iter().find(|ws| ws.root == loaded.root))
+        .map(|ws| ws.name.clone());
+
     if !repos.is_empty() {
         let lock = match RepoLock::load_or_create(&loaded.lock_path()) {
             Ok(lock) => lock,
@@ -471,7 +500,7 @@ fn cmd_doctor(common: CommonArgs) -> ExitCode {
             .map(|config| config.secondary)
             .unwrap_or_default();
         if mode == jjunction::config::SecondaryMode::Link
-            && let Ok(all) = workspace::list(&loaded.root)
+            && let Some(all) = ws_list.as_ref().ok()
             && let Some(default) = all.iter().find(|ws| ws.is_default)
             && default.root != loaded.root
         {
@@ -486,7 +515,17 @@ fn cmd_doctor(common: CommonArgs) -> ExitCode {
     }
 
     if !entries.is_empty() {
-        for diagnosis in link::doctor(&loaded.root, &entries) {
+        for entry in &entries {
+            if let Some(reason) = link::skip_reason(entry, ws_name.as_deref(), &machine) {
+                println!("{}: --  skipped ({reason})", entry.target);
+            }
+        }
+        let scoped: Vec<_> = entries
+            .iter()
+            .filter(|entry| link::in_scope(entry, ws_name.as_deref(), &machine))
+            .cloned()
+            .collect();
+        for diagnosis in link::doctor(&loaded.root, &scoped) {
             let mark = if diagnosis.status.is_ok() {
                 "ok"
             } else {

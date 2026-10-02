@@ -189,6 +189,34 @@ pub fn load_workspace_config(
         .unwrap_or_default())
 }
 
+/// Resolves the machine identity used by `machines = [...]` selectors
+/// (see `crate::link`). Priority: `--machine` CLI override, then the
+/// global `machine` key, then the hostname. The result is normalized by
+/// [`normalize_machine`].
+pub fn resolve_machine(global: &StackedConfig, cli: Option<&str>) -> String {
+    let raw = cli
+        .map(str::to_owned)
+        .or_else(|| global.get::<String>("machine").ok())
+        .unwrap_or_else(hostname);
+    normalize_machine(&raw)
+}
+
+/// Normalizes a machine name for selector comparison: trimmed, trailing
+/// root dot removed, lowercased. FQDN forms must be listed in full
+/// (`box` and `box.example.org` are distinct identities).
+pub fn normalize_machine(name: &str) -> String {
+    name.trim().trim_end_matches('.').to_lowercase()
+}
+
+/// Best-effort hostname: `gethostname(3)` via whoami, then the shell's
+/// `HOSTNAME` variable, then `"unknown"`.
+fn hostname() -> String {
+    whoami::fallible::hostname()
+        .ok()
+        .or_else(|| std::env::var("HOSTNAME").ok())
+        .unwrap_or_else(|| "unknown".to_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -278,5 +306,33 @@ mod tests {
         let local = local::LocalConfigReader::new(dir.path());
 
         assert!(local.layer().is_err());
+    }
+
+    #[test]
+    fn machine_priority_cli_over_global_key() {
+        let mut global = StackedConfig::empty();
+        global.add_layer(
+            ConfigLayer::parse(ConfigSource::User, "machine = \"Minisforum.\"\n").unwrap(),
+        );
+
+        assert_eq!(resolve_machine(&global, Some("Laptop.")), "laptop");
+        assert_eq!(resolve_machine(&global, None), "minisforum");
+    }
+
+    #[test]
+    fn machine_without_any_source_falls_back_to_hostname() {
+        // Only assert shape: the value itself is host-dependent.
+        let resolved = resolve_machine(&StackedConfig::empty(), None);
+        assert!(!resolved.is_empty());
+        assert_eq!(resolved, normalize_machine(&resolved));
+    }
+
+    #[test]
+    fn normalize_machine_trims_case_and_dot() {
+        assert_eq!(
+            normalize_machine("  Minisforum.LOCAL. "),
+            "minisforum.local"
+        );
+        assert_eq!(normalize_machine("Box.."), "box"); // trailing dots all go
     }
 }

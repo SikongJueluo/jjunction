@@ -11,6 +11,8 @@ A collection of tools for the [Jujutsu](https://github.com/jj-vcs/jj) (jj) versi
 #   source = "assets/shared.txt"   # or absolute / ~/ paths
 #   target = "links/shared.txt"     # relative to repo root
 #   type = "link"
+#   workspaces = ["feat-a", "default"]  # optional jj workspace names (default: all)
+#   machines = ["minisforum"]           # optional machine filter (default: all)
 #
 #   [[repo]]
 #   url = "https://github.com/org/repo.git"   # vendored sub-repo
@@ -43,6 +45,12 @@ commits, `jjn repo update` advances them). Dirty working copies are never
 touched — `jjn doctor` reports them. To develop a sub-repo, fork it and point
 the `url` at your fork. Network operations relay git's own progress onto a
 terminal progress bar (silent when piped or `--quiet`).
+
+Link selectors are optional whitelists — absent means everywhere. Machine
+identity resolves as `--machine` > the global config `machine` key > the
+hostname (normalized: trimmed, trailing dot dropped, lowercased; list FQDNs
+in full). Workspace names come from jj — the default workspace is named
+`default`. Out-of-scope entries are skipped with a reason, not an error.
 
 Trust the repo once (like `direnv allow`) — every gated message points here:
 

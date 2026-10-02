@@ -13,6 +13,7 @@ gix = { version = "0.87", default-features = false }
 toml_edit = "0.25"
 indicatif = "0.18"
 dirs = "7"
+whoami = "1"
 serde = { version = "1", features = ["derive"] }
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
